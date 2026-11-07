@@ -1,6 +1,6 @@
 import { View, div, image } from "gpui-kit";
 import { v_flex, h_flex, Popup, Popover } from "gpui-base";
-import { agents, panes, spaces, run, setAgentOrder, exec, appHome, terminals } from "herdr";
+import { agents, panes, spaces, run, setAgentOrder, exec, appHome, terminals, settings } from "herdr";
 
 import { families, familyFor, infoFor, nextForms, thresholdFor, evolutionChance, runIdentity, formatTime } from "./evolution.js";
 import { placeholderSprite } from "./placeholder.js";
@@ -9,7 +9,10 @@ export default class PokemonHabitat extends View {
   init(_props, cx) {
     this.pokemon = JSON.parse(localStorage.getItem("pokemon") ?? "{}");
     this.size = {width: 1000, height: 270};
+    this.panelPixels = null;
     this.hovered = null;
+    this.drag = null;
+    this.dragClick = null;
     const savedSize = localStorage.getItem("sprite-size");
     this.spriteSizeChoice = ["small", "medium", "big"].includes(savedSize) ? savedSize : "medium";
     this.optionsOpen = false;
@@ -107,7 +110,8 @@ export default class PokemonHabitat extends View {
     const entry = this.presence.get(address);
     if (entry.phase === "evolution") return div().id(`evolution-${address}-${entry.started}`).size(size)
       .child(image(entry.effect).size(size));
-    if (entry.phase === "loading" || !entry.cached) return placeholderSprite(size);
+    if (entry.phase === "loading") return div().size(size);
+    if (!entry.cached) return placeholderSprite(size);
     const number = this.pokemon[address]?.[0];
     const folder = `v4/${number}`;
     return div().id(`pokeball-${address}-${entry.phase}-${entry.started}`).size(size)
@@ -146,7 +150,15 @@ export default class PokemonHabitat extends View {
 
   spriteSize() {
     const requested = {small: 105.6, medium: 158.4, big: 211.2}[this.spriteSizeChoice];
-    return Math.min(requested, Math.max(48, this.size.height - 64), Math.max(48, this.size.width - 12));
+    return Math.max(1, Math.min(requested, this.size.width, this.size.height,
+      Math.max(48, this.size.height - 64), Math.max(48, this.size.width - 12)));
+  }
+
+  updatePanelSize() {
+    if (!this.panelPixels) return;
+    const zoom = Number(settings().zoom) || 1;
+    // on_size_change reports painted logical pixels; numeric styles apply zoom.
+    this.size = {width: this.panelPixels.width / zoom, height: this.panelPixels.height / zoom};
   }
 
   selectSpriteSize(choice) {
@@ -203,6 +215,66 @@ export default class PokemonHabitat extends View {
     };
   }
 
+  panelBounds(address, status) {
+    const size = this.spriteSize(), anchor = size * 88 / 96;
+    const box = this.spriteBounds(address, status).map(value => value * size / 96);
+    return {left: -box[0], right: this.size.width - box[2],
+      back: anchor - box[1], front: this.size.height + anchor - box[3]};
+  }
+
+  startDrag(address, event, cx) {
+    if (event.modifiers.control && event.modifiers.shift) return;
+    const status = this.presence.get(address)?.agent.status;
+    const box = this.spriteBounds(address, status).map(value => value * this.spriteSize() / 96);
+    const motion = this.walker(address), now = Date.now();
+    if (motion.walking) {
+      const progress = Math.max(0, Math.min(1, (now - motion.started) / motion.duration));
+      motion.x = motion.fromX + (motion.x - motion.fromX) * progress;
+      motion.y = motion.fromY + (motion.y - motion.fromY) * progress;
+    }
+    motion.walking = false;
+    motion.duration = 0;
+    motion.action = "idle";
+    const bounds = this.panelBounds(address, status);
+    motion.x = Math.max(bounds.left, Math.min(bounds.right, motion.x));
+    motion.y = Math.max(bounds.back, Math.min(bounds.front, motion.y));
+    this.dragClick = null;
+    // Pointer events use painted window pixels; layout values may be scaled.
+    const scaleX = event.bounds?.width / (box[2] - box[0]) || 1;
+    const scaleY = event.bounds?.height / (box[3] - box[1]) || 1;
+    const grabX = box[0] + (event.local_position?.x ?? (event.position.x - (event.bounds?.x ?? event.position.x))) / scaleX;
+    const grabY = box[1] + (event.local_position?.y ?? (event.position.y - (event.bounds?.y ?? event.position.y))) / scaleY;
+    this.drag = {address, status, pointer: {...event.position}, x: motion.x, y: motion.y,
+      scaleX, scaleY, grabX, grabY, moved: false};
+    this.hovered = null;
+    cx.stop_propagation();
+    cx.notify();
+  }
+
+  moveDrag(event, cx) {
+    const drag = this.drag;
+    if (!drag) return;
+    const dx = event.position.x - drag.pointer.x, dy = event.position.y - drag.pointer.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+    drag.moved = true;
+    const motion = this.walker(drag.address), bounds = this.panelBounds(drag.address, drag.status);
+    const local = event.local_position, painted = event.bounds;
+    const x = local && painted?.width ? local.x * this.size.width / painted.width - drag.grabX : drag.x + dx / drag.scaleX;
+    const y = local && painted?.height ? local.y * this.size.height / painted.height - drag.grabY + this.spriteSize() * 88 / 96 : drag.y + dy / drag.scaleY;
+    motion.x = Math.max(bounds.left, Math.min(bounds.right, x));
+    motion.y = Math.max(bounds.back, Math.min(bounds.front, y));
+    cx.notify();
+  }
+
+  stopDrag(cx) {
+    if (!this.drag) return;
+    const {address, moved} = this.drag;
+    if (moved) this.dragClick = address;
+    this.walker(address).next = Date.now() + 1500;
+    this.drag = null;
+    cx.notify();
+  }
+
   walker(address) {
     if (!this.walkers.has(address)) {
       const bounds = this.walkingBounds();
@@ -224,6 +296,7 @@ export default class PokemonHabitat extends View {
     let changed = false;
     const bounds = this.walkingBounds();
     for (const agent of list) {
+      if (this.drag?.address === agent.address) continue;
       if (this.presence.get(agent.address)?.phase !== "active") continue;
       const motion = this.walker(agent.address);
       if (motion.status !== agent.status) {
@@ -368,6 +441,7 @@ export default class PokemonHabitat extends View {
   prepareEvolutions(cx) {
     for (const agent of agents()) {
       const record = this.evolution[agent.address], entry = this.presence.get(agent.address);
+      if (this.drag?.address === agent.address) continue;
       if (!record?.due || entry?.phase !== "active") continue;
       const number = this.pokemon[agent.address]?.[0];
       const reserved = new Set(Object.entries(this.pokemon).filter(([address]) => address !== agent.address).map(([,mon]) => mon[0]));
@@ -455,7 +529,7 @@ export default class PokemonHabitat extends View {
     const number = this.pokemon[address]?.[0];
     const asset = this.assets.get(number), motion = this.walker(address);
     const action = status === "idle" ? "sleep" : status === "working" ? motion.action : "idle";
-    return asset?.manifest?.bounds?.[action]?.[motion.direction] ?? [20, 20, 76, 88];
+    return asset?.manifest?.bounds?.[action]?.[motion.direction] ?? [20.16, 18.24, 75.84, 77.76];
   }
 
   pokemonSprite(address, status, size = this.spriteSize()) {
@@ -498,6 +572,7 @@ export default class PokemonHabitat extends View {
   }
 
   render() {
+    this.updatePanelSize();
     this.syncPresence();
     this.advanceWalkers();
     const list = [...this.presence.values()].map(entry => entry.agent);
@@ -519,8 +594,15 @@ export default class PokemonHabitat extends View {
     const width = this.size.width, height = this.size.height;
     const stage = div().id("pokemon-meadow").relative().size_full().overflow_hidden()
       .bg("#72b998").border_t(1).border_color("#5a997d")
+      .on_mouse_move((event, cx) => this.moveDrag(event, cx))
+      .on_mouse_up("left", (event, cx) => { this.moveDrag(event, cx); this.stopDrag(cx); })
+      .on_hover((on, cx) => { if (!on) this.stopDrag(cx); })
       .on_size_change((size, cx) => {
-        if (this.size.width !== size.width || this.size.height !== size.height) { this.size = size; cx.notify(); }
+        if (this.panelPixels?.width !== size.width || this.panelPixels?.height !== size.height) {
+          this.panelPixels = size;
+          this.updatePanelSize();
+          cx.notify();
+        }
       })
       .child(div().absolute().inset_0().bg("#72b998").children(
         Array.from({length: Math.ceil(height / 48)}, (_, row) =>
@@ -534,10 +616,10 @@ export default class PokemonHabitat extends View {
         .child(this.optionsMenu()));
     if (!list.length) stage.child(div().absolute().left(25).bottom(45).text_color("#f0f8e8").text_size(13).child("Your Pokémon will arrive when an agent reports its status."));
     const actors = list.map(a => {
-      const mon = this.pokemonInfo(a.address), hover = this.hovered === a.address;
+      const mon = this.pokemonInfo(a.address), hover = !this.drag && this.hovered === a.address;
       const motion = this.walker(a.address);
       const spriteSize = this.spriteSize(), actorSize = spriteSize;
-      const bounds = this.walkingBounds();
+      const bounds = this.panelBounds(a.address, a.status);
       const x = Math.max(bounds.left, Math.min(bounds.right, motion.x));
       const feet = Math.max(bounds.back, Math.min(bounds.front, motion.y));
       // All supplied sprites have eight transparent pixels below their feet.
@@ -563,8 +645,14 @@ export default class PokemonHabitat extends View {
       // Anchor the popup to the visible silhouette, not transparent canvas padding.
       const trigger = div().id(`pokemon-hit-${a.address}`).w(box[2] - box[0]).h(box[3] - box[1])
         .cursor_pointer()
-        .on_hover((on, cx) => { this.hovered = on ? a.address : this.hovered === a.address ? null : this.hovered; cx.notify(); })
+        .on_hover((on, cx) => { if (this.drag) return; this.hovered = on ? a.address : this.hovered === a.address ? null : this.hovered; cx.notify(); })
+        .on_mouse_down("left", (event, cx) => this.startDrag(a.address, event, cx))
         .on_click((event, cx) => {
+          if (this.drag?.moved || this.dragClick === a.address) {
+            this.dragClick = null;
+            cx.stop_propagation();
+            return;
+          }
           if (event.modifiers.control && event.modifiers.shift) {
             cx.stop_propagation();
             this.debugEvolution(a.address, false, cx);
@@ -578,10 +666,12 @@ export default class PokemonHabitat extends View {
           this.debugEvolution(a.address, true, cx);
         });
       const popup = Popup.new(`agent-bubble-${a.address}`, trigger).anchor("bottom_left");
-      const actor = div().id(`roaming-${a.address}`).absolute().left(x).top(top).w(actorSize).h(actorSize)
-        .transition("left", {duration: motion.duration, easing: "linear"})
-        .transition("top", {duration: motion.duration, easing: "linear"})
+      const dragging = this.drag?.address === a.address;
+      const actor = div().id(`${dragging ? "dragging" : "roaming"}-${a.address}`).absolute().left(x).top(top).w(actorSize).h(actorSize)
         .child(this.pokemonSprite(a.address, a.status, spriteSize));
+      if (!dragging) actor
+        .transition("left", {duration: motion.duration, easing: "linear"})
+        .transition("top", {duration: motion.duration, easing: "linear"});
       if (hover && mon) {
         const space = spaces().find(s => s.id === a.space);
         const title = summary;
@@ -606,6 +696,18 @@ export default class PokemonHabitat extends View {
     // Draw the back of the meadow first so nearer Pokémon occlude distant ones.
     actors.sort((a, b) => a.depth - b.depth);
     for (const item of actors) stage.child(item.actor);
+    // Keep release events out of Popup triggers and other controls while dragging.
+    // A stationary surface also keeps the pointer target stable as actors move.
+    if (this.drag) stage.child(div().id("pokemon-drag-surface").absolute().inset_0()
+      .on_mouse_move((event, cx) => { this.moveDrag(event, cx); cx.stop_propagation(); })
+      .on_mouse_up("left", (event, cx) => {
+        this.moveDrag(event, cx);
+        this.stopDrag(cx);
+        cx.stop_propagation();
+      })
+      .on_mouse_down("left", (_event, cx) => { this.stopDrag(cx); cx.stop_propagation(); })
+      .on_click((_event, cx) => { this.stopDrag(cx); cx.stop_propagation(); })
+      .on_hover((on, cx) => { if (!on) this.stopDrag(cx); }));
     return stage;
   }
 }
