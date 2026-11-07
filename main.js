@@ -20,7 +20,6 @@ export default class PokemonHabitat extends View {
     this.panelPixels = null;
     this.hovered = null;
     this.drag = null;
-    this.dragClick = null;
     const savedSize = localStorage.getItem("sprite-size");
     this.spriteSizeChoice = ["small", "medium", "big"].includes(savedSize) ? savedSize : "medium";
     this.optionsOpen = false;
@@ -333,7 +332,6 @@ export default class PokemonHabitat extends View {
     const bounds = this.panelBounds(address, status);
     motion.x = Math.max(bounds.left, Math.min(bounds.right, motion.x));
     motion.y = Math.max(bounds.back, Math.min(bounds.front, motion.y));
-    this.dragClick = null;
     // Pointer events use painted window pixels; layout values may be scaled.
     const scaleX = event.bounds?.width / (box[2] - box[0]) || 1;
     const scaleY = event.bounds?.height / (box[3] - box[1]) || 1;
@@ -363,8 +361,7 @@ export default class PokemonHabitat extends View {
 
   stopDrag(cx) {
     if (!this.drag) return;
-    const {address, moved} = this.drag;
-    if (moved) this.dragClick = address;
+    const {address} = this.drag;
     const motion = this.walker(address);
     this.settleOnGround(motion);
     motion.next = Date.now() + 1500;
@@ -695,7 +692,7 @@ export default class PokemonHabitat extends View {
     const stage = div().id("pokemon-meadow").relative().size_full().overflow_hidden()
       .bg("#72b998").border_t(1).border_color("#5a997d")
       .on_mouse_move((event, cx) => this.moveDrag(event, cx))
-      .on_mouse_up("left", (event, cx) => { this.moveDrag(event, cx); this.stopDrag(cx); })
+      .on_mouse_up("right", (event, cx) => { this.moveDrag(event, cx); this.stopDrag(cx); })
       .on_hover((on, cx) => { if (!on) this.stopDrag(cx); })
       .on_size_change((size, cx) => {
         if (this.panelPixels?.width !== size.width || this.panelPixels?.height !== size.height) {
@@ -745,13 +742,7 @@ export default class PokemonHabitat extends View {
       const trigger = div().id(`pokemon-hit-${a.address}`).w(box[2] - box[0]).h(box[3] - box[1])
         .cursor_pointer()
         .on_hover((on, cx) => { if (this.drag) return; this.hovered = on ? a.address : this.hovered === a.address ? null : this.hovered; cx.notify(); })
-        .on_mouse_down("left", (event, cx) => this.startDrag(a.address, event, cx))
         .on_click((event, cx) => {
-          if (this.drag?.moved || this.dragClick === a.address) {
-            this.dragClick = null;
-            cx.stop_propagation();
-            return;
-          }
           if (event.modifiers.control && event.modifiers.shift) {
             cx.stop_propagation();
             this.debugEvolution(a.address, false, cx);
@@ -760,9 +751,12 @@ export default class PokemonHabitat extends View {
           if (a.pane) run("pane.focus", {pane:a.pane}); else run("terminal.peek", {terminal:a.address});
         })
         .on_mouse_down("right", (event, cx) => {
-          if (!event.modifiers.control || !event.modifiers.shift) return;
-          cx.stop_propagation();
-          this.debugEvolution(a.address, true, cx);
+          if (event.modifiers.control && event.modifiers.shift) {
+            cx.stop_propagation();
+            this.debugEvolution(a.address, true, cx);
+            return;
+          }
+          this.startDrag(a.address, event, cx);
         });
       const popup = Popup.new(`agent-bubble-${a.address}`, trigger).anchor("bottom_left");
       const dragging = this.drag?.address === a.address;
@@ -783,7 +777,7 @@ export default class PokemonHabitat extends View {
           .child(div().truncate().child(title))
           .child(div().text_size(10).text_color("#526457").truncate().child(`${a.program?.name || "Agent"} · ${a.address}`))
           .child(div().text_size(10).text_color("#526457").child(this.workSummary(a.address)))
-          .child(div().text_size(10).text_color("#526457").child("Click Pokémon to focus agent"))
+          .child(div().text_size(10).text_color("#526457").child("Left-click to focus agent · Right-drag to move"))
           .child(div().text_size(10).text_color("#526457").child(
             this.assets.get(mon.number)?.state === "ready" ? "SpriteCollab · artist credits saved with sprites" :
             this.assets.get(mon.number)?.state === "failed" ? "Generic companion · download will retry" : "Downloading animation cycles…")));
@@ -810,12 +804,12 @@ export default class PokemonHabitat extends View {
     // A stationary surface also keeps the pointer target stable as actors move.
     if (this.drag) stage.child(div().id("pokemon-drag-surface").absolute().inset_0()
       .on_mouse_move((event, cx) => { this.moveDrag(event, cx); cx.stop_propagation(); })
-      .on_mouse_up("left", (event, cx) => {
+      .on_mouse_up("right", (event, cx) => {
         this.moveDrag(event, cx);
         this.stopDrag(cx);
         cx.stop_propagation();
       })
-      .on_mouse_down("left", (_event, cx) => { this.stopDrag(cx); cx.stop_propagation(); })
+      .on_mouse_down("right", (_event, cx) => { this.stopDrag(cx); cx.stop_propagation(); })
       .on_click((_event, cx) => { this.stopDrag(cx); cx.stop_propagation(); })
       .on_hover((on, cx) => { if (!on) this.stopDrag(cx); }));
     return stage;

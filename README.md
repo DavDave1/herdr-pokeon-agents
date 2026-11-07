@@ -1,6 +1,6 @@
 # Pokémon Agents
 
-A Pokémon habitat for your agents in Herdr, with an Emerald forest clearing, paths, tall grass, a pond and trees. Agents roam on walkable ground; drag and release them to move them around the clearing.
+A Pokémon habitat for your agents in Herdr, with an Emerald forest clearing, paths, tall grass, a pond and trees. Agents roam on walkable ground; right-click and drag them to move them around the clearing. Left-click a Pokémon to select its agent.
 
 Choose **Forest, Desert, Cave or Mountain** under **Options → Biome**. Each habitat saves its type and a random biome seed, keeping its landscape consistent across reloads. Choose **Options → Generate new biome** for a different landscape. Layouts adapt to the pane size while retaining the saved seed.
 
