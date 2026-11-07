@@ -30,7 +30,22 @@ def build_biomes(folder, names):
             if name == 'tree.png':
                 continue
             if name in ('1.png', '4.png', '13.png'):
-                floor.save(out / name)
+                texture = floor.copy()
+                if name != '1.png':
+                    # Distinct, repeatable accents on the existing floor artwork:
+                    # windblown sand, cave gravel, and mountain scree.
+                    strength = {'desert': 14, 'cave': 20, 'mountain': 24}[theme]
+                    for y in range(texture.height):
+                        for x in range(texture.width):
+                            px, py = x // 3, y // 3
+                            mark = ((px * 13 + py * 29) % 19 < 4 if name == '4.png'
+                                    else (py + px // 5) % 5 == 0 if theme == 'desert'
+                                    else (px * 7 + py * 11) % 13 < 5)
+                            if mark:
+                                r, g, b, a = texture.getpixel((x, y))
+                                delta = strength if name == '4.png' else -strength
+                                texture.putpixel((x, y), tuple(max(0, min(255, c + delta)) for c in (r, g, b)) + (a,))
+                texture.save(out / name)
                 continue
             source = Image.open(folder / name).convert('RGBA')
             remap = dict(zip(SAND_COLORS, PATH_COLORS[theme])) if name.startswith('road-') else {}

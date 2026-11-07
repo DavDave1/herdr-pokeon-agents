@@ -17,10 +17,11 @@ from PIL import Image
 from package_roads import build_roads
 from package_biomes import build_biomes, TYPES
 
-VERSION = 6
+VERSION = 9
 SOURCE = 'https://raw.githubusercontent.com/pret/pokeemerald/master/data/tilesets/primary/general/'
 IDS = [108,197,268,1,4,13,21,28,104,105,106,200,201,202,208,209,210,216,217,218,211,212,213,214,280,281,282,288,289,290,296,297,298]
-TREE = [30,31,468,469,486,487]
+# Matching broadleaf crown, middle canopy, and trunk/base, in row order.
+TREE = [462,463,468,469,486,487]
 NAMES = ['tiles.png', 'metatiles.bin'] + [f'palettes/{i:02}.pal' for i in range(7)]
 
 
@@ -97,7 +98,7 @@ def build(downloads, folder):
         tree = Image.new('RGBA', (32,48))
         for i, number in enumerate(TREE):
             tree.alpha_composite(tiles[number], (i % 2 * 16, i // 2 * 16))
-        grass = set(tiles[1].convert('RGB').getdata())
+        grass = set(tiles[1].convert('RGB').getdata()) | set(tiles[28].convert('RGB').getdata())
         tree.putdata([(r,g,b,0 if (r,g,b) in grass else a) for r,g,b,a in tree.getdata()])
         tree.resize((96,144), Image.Resampling.NEAREST).save(folder / 'tree.png')
     build_roads(folder)
@@ -107,7 +108,7 @@ def build(downloads, folder):
 
 def package(cache):
     cache.mkdir(parents=True, exist_ok=True)
-    folder = cache / 'emerald-v6'
+    folder = cache / 'emerald-v9'
     with (cache / '.terrain.lock').open('w') as lock:
         fcntl.flock(lock, fcntl.LOCK_EX)
         cached = read_cached(folder)
@@ -122,7 +123,7 @@ def package(cache):
                            f'Source: {SOURCE}\nNo artwork license is granted by the source archive.\n'
                            'Reconstructed metatiles, transparent tree, nearest-neighbor enlargement and composed road corners.\n')
             (temporary / 'ATTRIBUTION.txt').write_text(attribution)
-            manifest = {'version': VERSION, 'source': SOURCE, 'path': 'data/pokemon-agents/terrain/emerald-v6',
+            manifest = {'version': VERSION, 'source': SOURCE, 'path': 'data/pokemon-agents/terrain/emerald-v9',
                         'sources': {name: hashlib.sha256(data).hexdigest() for name,data in downloads.items()},
                         'files': {name: hashlib.sha256((temporary / name).read_bytes()).hexdigest() for name in expected_files()}}
             (temporary / 'manifest.json').write_text(json.dumps(manifest))

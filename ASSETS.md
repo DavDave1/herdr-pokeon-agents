@@ -35,11 +35,11 @@ At runtime `package_tiles.py` fetches `tiles.png`, `metatiles.bin`, and palettes
 [pret/pokeemerald general tileset](https://github.com/pret/pokeemerald/tree/master/data/tilesets/primary/general).
 It reconstructs 16×16 metatiles with their original palette, flip and layer flags,
 then enlarges them with nearest-neighbor sampling. The transparent tree combines
-metatiles 30/31, 468/469 and 486/487 (crown, canopy and one trunk/base). `package_roads.py` generates 47 neighbor-aware
+metatiles 462/463, 468/469 and 486/487 (crown, canopy and one trunk/base). `package_roads.py` generates 47 neighbor-aware
 road tiles, including outer and inset corners. The map and collision logic are original.
 
 Complete packs are published atomically under Herdr's
-`data/pokemon-agents/terrain/emerald-v6/`, outside the mod repository. A process lock
+`data/pokemon-agents/terrain/emerald-v9/`, outside the mod repository. A process lock
 shares downloads between windows. Cache validation checks every expected PNG and
 its SHA-256 hash before reuse; invalid packs are rebuilt. Downloads have time and
 size limits. Failures retain the placeholder and retry with delays from 30 seconds

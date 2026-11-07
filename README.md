@@ -2,7 +2,7 @@
 
 A Pokémon habitat for your agents in Herdr, with an Emerald forest clearing, paths, tall grass, a pond and trees. Agents roam on walkable ground; right-click and drag them to move them around the clearing. Left-click a Pokémon to select its agent.
 
-Choose **Forest, Desert, Cave or Mountain** under **Options → Biome**. Each habitat saves its type and a random biome seed, keeping its landscape consistent across reloads. Choose **Options → Generate new biome** for a different landscape. Layouts adapt to the pane size while retaining the saved seed.
+Choose **Forest, Desert, Cave or Mountain** under **Options → Biome**. Each habitat saves its type and a random biome seed, keeping its landscape consistent across reloads. Choose **Options → Generate new biome** for a different landscape. Seeds vary winding roads, forks, crossroads, clearings, pools, boundary ledges, and prop clusters. Forests mix groves and rocks; deserts have sparse boulders and occasional oases; caves favor gravel and pools; mountains favor scree and rock clusters. Resizing reveals or clips the same terrain, anchored to the bottom-left; the northern treeline and rock ledge follow the top edge.
 
 ## Install
 

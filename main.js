@@ -137,7 +137,7 @@ export default class PokemonHabitat extends View {
         const result = await exec("python3", [`${appHome()}/mods/pokemon-agents/package_tiles.py`]);
         if (result.code !== 0) throw new Error(result.stderr || "Terrain download failed");
         const manifest = JSON.parse(result.stdout);
-        if (manifest.version !== 6 || manifest.path !== "data/pokemon-agents/terrain/emerald-v6") throw new Error("Invalid terrain manifest");
+        if (manifest.version !== 9 || manifest.path !== "data/pokemon-agents/terrain/emerald-v9") throw new Error("Invalid terrain manifest");
         this.terrain = {state: "ready", path: manifest.path};
         for (const motion of this.walkers.values()) {
           if (motion.walking) {
@@ -790,8 +790,8 @@ export default class PokemonHabitat extends View {
     for (const prop of this.biome().scenery) actors.push({
       // Give each tree its own clipped paint bounds and stable identity, just
       // like actors, so overlapping image draws retain the shared painter order.
-      actor: div().id(prop.id).absolute().left(prop.x).top(prop.y).w(prop.w).h(prop.h).overflow_hidden()
-        .child(image(prop.path).size_full()),
+      actor: div().id(prop.id).absolute().left(prop.x).top(prop.y + (prop.clipTop ?? 0)).w(prop.w).h(prop.h - (prop.clipTop ?? 0)).overflow_hidden()
+        .child(image(prop.path).absolute().left(0).top(-(prop.clipTop ?? 0)).w(prop.w).h(prop.h)),
       depth: prop.depth, x: prop.x,
     });
     actors.sort(compareDepth);
