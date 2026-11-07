@@ -1,0 +1,24 @@
+# Local agent/environment state
+/.agents/
+/.codex/
+/.aws/
+
+# Python bytecode and tool caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.venv/
+venv/
+
+# Runtime data and caches (normally stored outside this repository)
+/data/
+/sprites/
+/.cache/
+
+# Local logs and temporary files
+*.log
+*.tmp
+*.swp
+*~
