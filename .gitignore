@@ -22,3 +22,7 @@ venv/
 *.tmp
 *.swp
 *~
+
+# Only the original fallback tile is shipped
+/tiles/*
+!/tiles/placeholder.svg

@@ -4,11 +4,19 @@ import { agents, panes, spaces, run, setAgentOrder, exec, appHome, terminals, se
 
 import { families, familyFor, infoFor, nextForms, thresholdFor, evolutionChance, runIdentity, formatTime } from "./evolution.js";
 import { placeholderSprite } from "./placeholder.js";
+import { buildBiome, clearRoute, nearestGround, compareDepth, BIOME_TYPES, BIOME_LABELS } from "./biome.js";
 
 export default class PokemonHabitat extends View {
   init(_props, cx) {
     this.pokemon = JSON.parse(localStorage.getItem("pokemon") ?? "{}");
     this.size = {width: 1000, height: 270};
+    const storedSeed = localStorage.getItem("biome-seed");
+    const parsedSeed = storedSeed === null ? NaN : Number(storedSeed);
+    this.biomeSeed = Number.isInteger(parsedSeed) && parsedSeed >= 0 && parsedSeed <= 0xffffffff
+      ? parsedSeed : Math.floor(Math.random() * 4294967296);
+    localStorage.setItem("biome-seed", String(this.biomeSeed));
+    const savedBiome = localStorage.getItem("biome-type");
+    this.biomeType = BIOME_TYPES.includes(savedBiome) ? savedBiome : "forest";
     this.panelPixels = null;
     this.hovered = null;
     this.drag = null;
@@ -20,6 +28,8 @@ export default class PokemonHabitat extends View {
     this.presence = new Map();
     this.assets = new Map();
     this.downloads = 0;
+    this.terrain = {state: "pending"};
+    this.loadTerrain(cx);
     this.evolution = JSON.parse(localStorage.getItem("evolution-progress") ?? "{}");
     this.evolutionEffects = new Map();
     this.lastWorkSample = Date.now();
@@ -35,6 +45,7 @@ export default class PokemonHabitat extends View {
       const movementChanged = this.advanceWalkers();
       if (presenceChanged || movementChanged) cx.notify();
       this.loadAnimations(cx);
+      this.loadTerrain(cx);
     });
   }
   syncPresence() {
@@ -118,6 +129,38 @@ export default class PokemonHabitat extends View {
       .child(image(`data/pokemon-agents/${folder}/${entry.phase}.webp`).size(size));
   }
 
+  loadTerrain(cx) {
+    if (["loading", "ready"].includes(this.terrain.state) || Date.now() < (this.terrain.retry ?? 0)) return;
+    const attempts = this.terrain.attempts ?? 0;
+    this.terrain = {state: "loading", attempts};
+    cx.spawn(async cx => {
+      try {
+        const result = await exec("python3", [`${appHome()}/mods/pokemon-agents/package_tiles.py`]);
+        if (result.code !== 0) throw new Error(result.stderr || "Terrain download failed");
+        const manifest = JSON.parse(result.stdout);
+        if (manifest.version !== 6 || manifest.path !== "data/pokemon-agents/terrain/emerald-v6") throw new Error("Invalid terrain manifest");
+        this.terrain = {state: "ready", path: manifest.path};
+        for (const motion of this.walkers.values()) {
+          if (motion.walking) {
+            const progress = Math.min(1, Math.max(0, (Date.now() - motion.started) / motion.duration));
+            motion.x = motion.fromX + (motion.x - motion.fromX) * progress;
+            motion.y = motion.fromY + (motion.y - motion.fromY) * progress;
+          }
+          this.settleOnGround(motion);
+          motion.walking = false;
+          motion.duration = 0;
+          motion.action = "idle";
+          motion.next = Date.now() + 500;
+        }
+      } catch (error) {
+        this.terrain = {state: "failed", attempts: attempts + 1,
+          retry: Date.now() + Math.min(300000, 30000 * 2 ** attempts)};
+        console.log(`Terrain: ${error}`);
+      }
+      cx.notify();
+    });
+  }
+
   loadAnimations(cx) {
     const numbers = new Set(agents().map(a => this.pokemon[a.address]?.[0]).filter(Boolean));
     for (const record of Object.values(this.evolution)) {
@@ -174,6 +217,7 @@ export default class PokemonHabitat extends View {
       }
       motion.x = Math.max(bounds.left, Math.min(bounds.right, motion.x));
       motion.y = Math.max(bounds.back, Math.min(bounds.front, motion.y));
+      this.settleOnGround(motion);
       motion.walking = false;
       motion.duration = 0;
       motion.moveChance = .2;
@@ -201,7 +245,58 @@ export default class PokemonHabitat extends View {
             .on_click((_event, cx) => { this.selectSpriteSize(choice); cx.notify(); })
             .child(choice[0].toUpperCase() + choice.slice(1))
             .child(selected ? "✓" : "");
-        })));
+        }))
+        .child(div().h(1).my(5).bg("#c5d5c0"))
+        .child(div().px(8).py(4).font_semibold().child("Biome"))
+        .children(BIOME_TYPES.map(type => h_flex().id(`pokemon-biome-${type}`).px(8).py(7).rounded(5).justify_between()
+          .bg(type === this.biomeType ? "#cfe6ce" : "#fff9e8").cursor_pointer()
+          .hover(style => style.bg("#dfedda"))
+          .child(type[0].toUpperCase() + type.slice(1)).child(type === this.biomeType ? "✓" : "")
+          .on_click((_event, cx) => {
+            this.biomeType = type;
+            localStorage.setItem("biome-type", type);
+            this.regenerateBiome(false);
+            cx.notify();
+          })))
+        .child(div().h(1).my(5).bg("#c5d5c0"))
+        .child(div().id("pokemon-new-biome").px(8).py(7).rounded(5).cursor_pointer()
+          .hover(style => style.bg("#dfedda"))
+          .child("Generate new biome")
+          .on_click((_event, cx) => { this.regenerateBiome(); cx.notify(); })));
+
+  }
+
+  regenerateBiome(newSeed = true) {
+    if (newSeed) this.biomeSeed = (this.biomeSeed + 1 + Math.floor(Math.random() * 0xffffffff)) >>> 0;
+    localStorage.setItem("biome-seed", String(this.biomeSeed));
+    this.optionsOpen = false;
+    this.drag = null;
+    this.hovered = null;
+    const now = Date.now();
+    for (const motion of this.walkers.values()) {
+      if (motion.walking) {
+        const progress = Math.min(1, Math.max(0, (now - motion.started) / motion.duration));
+        motion.x = motion.fromX + (motion.x - motion.fromX) * progress;
+        motion.y = motion.fromY + (motion.y - motion.fromY) * progress;
+      }
+      this.settleOnGround(motion);
+      Object.assign(motion, {walking: false, duration: 0, action: "idle", next: now + 500});
+    }
+  }
+
+  biome() {
+    const key = `${this.size.width}:${this.size.height}:${this.terrain.path ?? "placeholder"}:${this.biomeSeed}:${this.biomeType}`;
+    if (this.biomeKey !== key) {
+      this.biomeKey = key;
+      this.biomeLayout = buildBiome(this.size.width, this.size.height, this.terrain.path, this.biomeSeed, this.biomeType);
+    }
+    return this.biomeLayout;
+  }
+
+  settleOnGround(motion) {
+    const point = nearestGround(this.biome(), motion.x, motion.y, this.walkingBounds(), this.spriteSize() / 2);
+    motion.x = point.x;
+    motion.y = point.y;
   }
 
   walkingBounds() {
@@ -270,7 +365,9 @@ export default class PokemonHabitat extends View {
     if (!this.drag) return;
     const {address, moved} = this.drag;
     if (moved) this.dragClick = address;
-    this.walker(address).next = Date.now() + 1500;
+    const motion = this.walker(address);
+    this.settleOnGround(motion);
+    motion.next = Date.now() + 1500;
     this.drag = null;
     cx.notify();
   }
@@ -278,9 +375,11 @@ export default class PokemonHabitat extends View {
   walker(address) {
     if (!this.walkers.has(address)) {
       const bounds = this.walkingBounds();
+      const point = nearestGround(this.biome(),
+        bounds.left + Math.random() * (bounds.right - bounds.left),
+        bounds.back + Math.random() * (bounds.front - bounds.back), bounds, this.spriteSize() / 2);
       this.walkers.set(address, {
-        x: bounds.left + Math.random() * (bounds.right - bounds.left),
-        y: bounds.back + Math.random() * (bounds.front - bounds.back),
+        x: point.x, y: point.y,
         direction: "s", moveChance: .2, action: "idle", walking: false, duration: 0, next: Date.now() + 500 + Math.random() * 2000,
       });
     }
@@ -349,7 +448,8 @@ export default class PokemonHabitat extends View {
       const x = Math.max(bounds.left, Math.min(bounds.right, motion.x + Math.cos(direction) * distance));
       const y = Math.max(bounds.back, Math.min(bounds.front, motion.y + Math.sin(direction) * distance * .55));
       const length = Math.hypot(x - motion.x, y - motion.y);
-      if (length < 8) {
+      const offset = this.spriteSize() / 2;
+      if (length < 8 || !clearRoute(this.biome(), motion.x + offset, motion.y, x + offset, y)) {
         motion.next = now + 500;
         continue;
       }
@@ -601,19 +701,18 @@ export default class PokemonHabitat extends View {
         if (this.panelPixels?.width !== size.width || this.panelPixels?.height !== size.height) {
           this.panelPixels = size;
           this.updatePanelSize();
+          for (const motion of this.walkers.values()) {
+            this.settleOnGround(motion);
+            motion.walking = false;
+            motion.duration = 0;
+            motion.action = "idle";
+            motion.next = Date.now() + 500;
+          }
           cx.notify();
         }
       })
-      .child(div().absolute().inset_0().bg("#72b998").children(
-        Array.from({length: Math.ceil(height / 48)}, (_, row) =>
-          Array.from({length: Math.ceil(width / 48)}, (_, col) => {
-            // Stable tile coordinates keep the scenery still on hover and resize.
-            return image("mods/pokemon-agents/tiles/walking-grass.svg").absolute().left(col * 48).top(row * 48).w(48).h(48);
-          })).flat()))
-      .child(h_flex().absolute().top(10).left(14).right(14).items_center().justify_between()
-        .child(div().px(10).py(5).rounded(6).bg("#132e25e8").text_size(12).text_color("#edf8dc")
-          .child(`Pokémon meadow · ${agents().length} agent${agents().length === 1 ? "" : "s"}`))
-        .child(this.optionsMenu()));
+      .child(div().absolute().inset_0().children(this.biome().ground.map(tile =>
+        image(tile.path).absolute().left(tile.x).top(tile.y).w(tile.w).h(tile.h))));
     if (!list.length) stage.child(div().absolute().left(25).bottom(45).text_color("#f0f8e8").text_size(13).child("Your Pokémon will arrive when an agent reports its status."));
     const actors = list.map(a => {
       const mon = this.pokemonInfo(a.address), hover = !this.drag && this.hovered === a.address;
@@ -694,8 +793,19 @@ export default class PokemonHabitat extends View {
       return {actor, depth: feet};
     });
     // Draw the back of the meadow first so nearer Pokémon occlude distant ones.
-    actors.sort((a, b) => a.depth - b.depth);
+    for (const prop of this.biome().scenery) actors.push({
+      // Give each tree its own clipped paint bounds and stable identity, just
+      // like actors, so overlapping image draws retain the shared painter order.
+      actor: div().id(prop.id).absolute().left(prop.x).top(prop.y).w(prop.w).h(prop.h).overflow_hidden()
+        .child(image(prop.path).size_full()),
+      depth: prop.depth, x: prop.x,
+    });
+    actors.sort(compareDepth);
     for (const item of actors) stage.child(item.actor);
+    stage.child(h_flex().absolute().top(10).left(14).right(14).items_center().justify_between()
+      .child(div().px(10).py(5).rounded(6).bg("#132e25e8").text_size(12).text_color("#edf8dc")
+        .child(`${BIOME_LABELS[this.biomeType]} · ${agents().length} agent${agents().length === 1 ? "" : "s"}`))
+      .child(this.optionsMenu()));
     // Keep release events out of Popup triggers and other controls while dragging.
     // A stationary surface also keeps the pointer target stable as actors move.
     if (this.drag) stage.child(div().id("pokemon-drag-surface").absolute().inset_0()
