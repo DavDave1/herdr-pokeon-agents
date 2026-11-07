@@ -447,14 +447,8 @@ export default class PokemonHabitat extends View {
     cx.notify();
   }
 
-  evolutionSummary(address) {
-    const record = this.evolution[address];
-    if (!record) return "Evolution progresses while working";
-    const nominal = thresholdFor(this.pokemon[address]?.[0]);
-    const elapsed = formatTime(record.workingMs);
-    if (!nominal) return `${elapsed} working · Fully evolved`;
-    if (record.due) return `${elapsed} working · Evolution ready`;
-    return `${elapsed} working · Evolution around ${formatTime(nominal)}`;
+  workSummary(address) {
+    return `worked for ${formatTime(this.evolution[address]?.workingMs ?? 0)}`;
   }
 
   spriteBounds(address, status) {
@@ -599,7 +593,7 @@ export default class PokemonHabitat extends View {
           .child(div().font_semibold().truncate().child(a.space_name || space?.name || "Agent"))
           .child(div().truncate().child(title))
           .child(div().text_size(10).text_color("#526457").truncate().child(`${a.program?.name || "Agent"} · ${a.address}`))
-          .child(div().text_size(10).text_color("#526457").child(this.evolutionSummary(a.address)))
+          .child(div().text_size(10).text_color("#526457").child(this.workSummary(a.address)))
           .child(div().text_size(10).text_color("#526457").child("Click Pokémon to focus agent"))
           .child(div().text_size(10).text_color("#526457").child(
             this.assets.get(mon.number)?.state === "ready" ? "SpriteCollab · artist credits saved with sprites" :
