@@ -34,15 +34,7 @@ const SPRITES = new Map(Object.entries({
   blocked: {
     scale: 2, fill: "#ffd065", light: "#fff4c4", shade: "#e99445", ink: "#542d36",
     lift: 4, period: 850, priority: 2,
-    glyph: [
-      "..###..",
-      "..###..",
-      "..###..",
-      "...#...",
-      ".......",
-      "..###..",
-      "..###..",
-    ],
+    strokes: [[2, 0, 3, 4], [2, 5, 3, 2]],
   },
   error: {
     scale: 2, fill: "#d94b57", light: "#ffb1a7", shade: "#ab344e", ink: "#fff4e4",
@@ -61,7 +53,7 @@ const SPRITES = new Map(Object.entries({
 const ROW_SPACING = Math.max(...Array.from(SPRITES.values(), ({scale, lift}) => HEIGHT * scale + lift)) + 3;
 
 function pixelBubble(sprite) {
-  const {scale, fill, light, shade, ink, glyph} = sprite;
+  const {scale, fill, light, shade, ink, glyph, strokes} = sprite;
   const rect = (x, y, w, h, color) => div().absolute()
     .left(x * scale).top(y * scale).w(w * scale).h(h * scale).bg(color);
   const bubble = div().absolute().left(0).top(0).size_full()
@@ -70,17 +62,21 @@ function pixelBubble(sprite) {
     .child(rect(1, 1, 12, 10, OUTLINE))
     .child(rect(0, 2, 14, 8, OUTLINE))
     .child(rect(4, 11, 4, 2, OUTLINE))
-    .child(rect(4, 13, 3, 1, OUTLINE))
-    .child(rect(4, 14, 2, 1, OUTLINE))
+    .child(rect(4, 12, 3, 2, OUTLINE))
+    .child(rect(4, 13, 2, 2, OUTLINE))
     .child(rect(2, 1, 10, 10, shade))
     .child(rect(1, 2, 12, 8, shade))
     .child(rect(5, 11, 2, 1, shade))
-    .child(rect(5, 12, 1, 1, shade))
+    .child(rect(5, 11, 1, 2, shade))
     .child(rect(2, 1, 10, 8, fill))
     .child(rect(1, 2, 12, 6, fill))
     .child(rect(3, 1, 8, 1, light))
     .child(rect(2, 2, 1, 2, light));
-  for (const [y, row] of glyph.entries()) {
+  // Paint solid strokes as single quads so fractional zoom cannot split them.
+  for (const [x, y, w, h] of strokes ?? []) {
+    bubble.child(rect(4 + x, 2 + y, w, h, ink));
+  }
+  for (const [y, row] of (glyph ?? []).entries()) {
     for (const run of row.matchAll(/#+/g)) {
       bubble.child(rect(4 + run.index, 2 + y, run[0].length, 1, ink));
     }
