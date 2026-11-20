@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildBiome, roadMask, BIOME_TYPES, TILE, isWalkable} from '../biome.js';
+import {buildBiome, roadMask, BIOME_TYPES, TILE, isWalkable, clearRoute, nearestGround} from '../biome.js';
 import {createBiomeWorld, getBiomeWorld, overlaps, WORLD_HEIGHT} from '../biome-world.js';
 
 const terrain = 'terrain';
@@ -56,6 +56,32 @@ test('roads stay open; props avoid water, grass and incompatible canopies', () =
     for (const p of roads.filter(p=>p.y>64)) assert.equal(isWalkable(b,p.x+16,p.y+16,0),true);
   }
   assert.ok(checkedTrees>0 && checkedRocks>0 && checkedWater>0);
+});
+
+test('walking routes stop at the tree canopy', () => {
+  const biome = buildBiome(800, 400, terrain, 4);
+  const tree = biome.scenery.find(prop => prop.kind === 'tree');
+  const x = tree.x + tree.w / 2;
+  assert.ok(isWalkable(biome, x, tree.y - 12));
+  assert.equal(isWalkable(biome, x, tree.y + 8), false);
+  assert.equal(clearRoute(biome, x, tree.y - 12, x, tree.y + 8), false);
+});
+
+test('a drop clears the tree canopy even if the ground anchor is clear', () => {
+  const biome = buildBiome(800, 437.5, terrain, 4);
+  const trees = biome.scenery.filter(prop => prop.kind === 'tree');
+  const tree = trees.at(-1);
+  const offset = 79.2;
+  const x = tree.x + tree.w / 2 - offset;
+  const y = tree.y + tree.h + 12;
+  const body = {x: offset - 13, y: -40, w: 26, h: 28};
+  const bounds = {left: 6, right: 635.6, back: 191.2, front: 409.5};
+  assert.deepEqual(nearestGround(biome, x, y, bounds, offset), {x, y});
+  const drop = nearestGround(biome, x, y, bounds, offset, body);
+  assert.ok(drop && isWalkable(biome, drop.x + offset, drop.y));
+  const sprite = {...body, x: drop.x + body.x, y: drop.y + body.y};
+  assert.ok(!trees.some(prop => overlaps(sprite, prop)));
+  assert.equal(nearestGround(biome, x, y, {left: x, right: x, back: y, front: y}, offset, body), null);
 });
 
 test('all connected tile masks match world neighbors, and seeds change layouts', () => {

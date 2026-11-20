@@ -1,4 +1,4 @@
-import { getBiomeWorld, WORLD_HEIGHT, CHUNK } from "./biome-world.js";
+import { getBiomeWorld, overlaps, WORLD_HEIGHT, CHUNK } from "./biome-world.js";
 
 // Emerald metatiles are 16px, packaged at 3× with nearest-neighbor sampling.
 export const TILE = 32;
@@ -34,7 +34,9 @@ export function buildBiome(width, height, terrainPath = null, seed = 0, type = "
     const y = prop.y + offsetY;
     scenery.push({...prop, id: `${type}-prop-${prop.id}`,
       path: asset(prop.kind), y, depth: prop.depth + offsetY});
-    obstacles.push({x: prop.x + prop.w * .2, y: y + prop.h - TILE * .65, w: prop.w * .6, h: TILE * .6});
+    obstacles.push(prop.kind === "tree"
+      ? {x: prop.x, y, w: prop.w, h: prop.h}
+      : {x: prop.x + prop.w * .2, y: y + prop.h - TILE * .65, w: prop.w * .6, h: TILE * .6});
   };
   // Include neighboring owners so canopies and collisions remain correct at
   // chunk borders and when a resize reveals part of a previously hidden prop.
@@ -75,14 +77,21 @@ export function clearRoute(biome, fromX, fromY, x, y) {
   return true;
 }
 
-export function nearestGround(biome, x, y, bounds, offset) {
+export function nearestGround(biome, x, y, bounds, offset, body = null) {
+  const trees = body ? biome.scenery.filter(prop => prop.kind === "tree") : [];
+  const canStand = (px, py) => {
+    if (!isWalkable(biome, px + offset, py)) return false;
+    if (!body) return true;
+    const sprite = {x: px + body.x, y: py + body.y, w: body.w, h: body.h};
+    return !trees.some(tree => overlaps(sprite, tree));
+  };
   const clamp = (v, low, high) => Math.max(low, Math.min(high, v));
   x = clamp(x, bounds.left, bounds.right); y = clamp(y, bounds.back, bounds.front);
-  if (isWalkable(biome, x + offset, y)) return {x, y};
+  if (canStand(x, y)) return {x, y};
   let best = null, distance = Infinity;
   for (let py = bounds.back; py <= bounds.front; py += 8) for (let px = bounds.left; px <= bounds.right; px += 8) {
     const d = (px - x) ** 2 + (py - y) ** 2;
-    if (d < distance && isWalkable(biome, px + offset, py)) { best = {x: px, y: py}; distance = d; }
+    if (d < distance && canStand(px, py)) { best = {x: px, y: py}; distance = d; }
   }
-  return best ?? {x, y};
+  return best;
 }

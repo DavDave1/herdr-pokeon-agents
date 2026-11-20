@@ -292,10 +292,10 @@ export default class PokemonHabitat extends View {
     return this.biomeLayout;
   }
 
-  settleOnGround(motion) {
-    const point = nearestGround(this.biome(), motion.x, motion.y, this.walkingBounds(), this.spriteSize() / 2);
-    motion.x = point.x;
-    motion.y = point.y;
+  settleOnGround(motion, body = null) {
+    const point = nearestGround(this.biome(), motion.x, motion.y, this.walkingBounds(), this.spriteSize() / 2, body);
+    if (point) Object.assign(motion, point);
+    return Boolean(point);
   }
 
   walkingBounds() {
@@ -360,9 +360,14 @@ export default class PokemonHabitat extends View {
 
   stopDrag(cx) {
     if (!this.drag) return;
-    const {address} = this.drag;
+    const {address, x, y} = this.drag;
     const motion = this.walker(address);
-    this.settleOnGround(motion);
+    const scale = this.spriteSize() / 96;
+    const status = this.presence.get(address)?.agent.status ?? this.drag.status;
+    const [left, top, right, bottom] = this.spriteBounds(address, status).map(value => value * scale);
+    // A visible sprite can cover a canopy even when its ground anchor clears it.
+    const body = {x: left, y: top - 88 * scale, w: right - left, h: bottom - top};
+    if (!this.settleOnGround(motion, body)) Object.assign(motion, {x, y});
     motion.next = Date.now() + 1500;
     this.drag = null;
     cx.notify();
@@ -371,9 +376,9 @@ export default class PokemonHabitat extends View {
   walker(address) {
     if (!this.walkers.has(address)) {
       const bounds = this.walkingBounds();
-      const point = nearestGround(this.biome(),
-        bounds.left + Math.random() * (bounds.right - bounds.left),
-        bounds.back + Math.random() * (bounds.front - bounds.back), bounds, this.spriteSize() / 2);
+      const x = bounds.left + Math.random() * (bounds.right - bounds.left);
+      const y = bounds.back + Math.random() * (bounds.front - bounds.back);
+      const point = nearestGround(this.biome(), x, y, bounds, this.spriteSize() / 2) ?? {x, y};
       this.walkers.set(address, {
         x: point.x, y: point.y,
         direction: "s", moveChance: .2, action: "idle", walking: false, duration: 0, next: Date.now() + 500 + Math.random() * 2000,
