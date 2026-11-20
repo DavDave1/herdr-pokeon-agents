@@ -6,6 +6,9 @@
 # Local dependencies
 /node_modules/
 
+# Herdr-generated editor declarations
+/gpui-kit.d.ts
+
 # Runtime data and caches (normally stored outside this repository)
 /data/
 /sprites/

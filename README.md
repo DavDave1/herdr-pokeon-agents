@@ -6,16 +6,21 @@ Choose **Options → Biome** to switch between Forest, Desert, Cave, and Mountai
 
 ## Install
 
-1. Install Herdr. This mod was tested with Herdr 0.1.16. [Herdr installation](https://github.com/herdrdev/herdr-app)
-2. Download the release source and place the extracted folder at `~/.config/herdr-app/mods/pokemon-agents/`. Use `$HERDR_APP_HOME/mods/pokemon-agents/` if you set `HERDR_APP_HOME`. The folder should contain `mod.json` and `main.js` at its root.
-3. For downloaded terrain, Pokémon sprites, and evolution effects, install Node.js 22 or newer with npm. Run `npm ci` in the mod folder and make sure Herdr can find `node` on its PATH. A grass tile and generic companions are available while artwork downloads or when the helper is unavailable.
-4. With Herdr running and a space selected, open the habitat in a tab.
+With Herdr running and a space selected, paste this into a local Linux or macOS terminal. The installer uses Git and opens the habitat in a new tab. Tested with Herdr 0.1.16. [Herdr installation](https://github.com/herdrdev/herdr-app)
 
-   ```sh
-   herdr-app do tab.new '{"name":"Pokémon","mod":"pokemon-agents"}'
-   ```
+```sh
+curl -fsSL https://raw.githubusercontent.com/DavDave1/herdr-pokeon-agents/main/install.sh | sh
+```
 
-To use the habitat as your Agents panel, open a personal layout or duplicate the shipped one.
+With Node.js 22 or newer and npm available, the installer sets up downloadable terrain, sprites, and effects. Herdr needs `node` on its PATH to use them. The habitat uses placeholder artwork while downloads load or when the helper is unavailable.
+
+### Manual install
+
+Place the extracted release folder at `~/.config/herdr-app/mods/pokemon-agents/`, with `mod.json` and `main.js` at its root. Use your configured Herdr home if it differs. For downloaded artwork, run `npm ci` in the mod folder. Open the habitat with `herdr-app do tab.new '{"name":"Pokémon","mod":"pokemon-agents"}'`.
+
+### Use as the Agents panel
+
+Open a personal layout or duplicate the shipped one.
 
 ```sh
 herdr-app do layout.clone '{"name":"main","as":"pokemon-agents"}'
