@@ -74,14 +74,27 @@ test('a drop clears the tree canopy even if the ground anchor is clear', () => {
   const offset = 79.2;
   const x = tree.x + tree.w / 2 - offset;
   const y = tree.y + tree.h + 12;
-  const body = {x: offset - 13, y: -40, w: 26, h: 28};
+  const body = {x: -13, y: -40, w: 26, h: 28};
   const bounds = {left: 6, right: 635.6, back: 191.2, front: 409.5};
   assert.deepEqual(nearestGround(biome, x, y, bounds, offset), {x, y});
   const drop = nearestGround(biome, x, y, bounds, offset, body);
   assert.ok(drop && isWalkable(biome, drop.x + offset, drop.y));
-  const sprite = {...body, x: drop.x + body.x, y: drop.y + body.y};
+  const sprite = {...body, x: drop.x + offset + body.x, y: drop.y + body.y};
   assert.ok(!trees.some(prop => overlaps(sprite, prop)));
   assert.equal(nearestGround(biome, x, y, {left: x, right: x, back: y, front: y}, offset, body), null);
+});
+
+test('walking rejects a sprite that crosses a canopy between clear endpoints', () => {
+  const biome = buildBiome(800, 437.5, terrain, 4);
+  const tree = biome.scenery.filter(prop => prop.kind === 'tree').at(-1);
+  const body = {x: -13, y: -40, w: 26, h: 28};
+  const fromX = tree.x - 72, toX = tree.x + tree.w + 22;
+  const y = tree.y + tree.h + 14;
+  assert.ok(isWalkable(biome, fromX, y, 5, body));
+  assert.ok(isWalkable(biome, toX, y, 5, body));
+  assert.ok(clearRoute(biome, fromX, y, toX, y));
+  assert.equal(clearRoute(biome, fromX, y, toX, y, body), false);
+  assert.ok(clearRoute(biome, fromX, y + 30, toX, y + 30, body));
 });
 
 test('all connected tile masks match world neighbors, and seeds change layouts', () => {

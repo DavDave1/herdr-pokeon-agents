@@ -5,12 +5,28 @@ import { agents, panes, spaces, run, setAgentOrder, exec, appHome, terminals, se
 import { families, infoFor, nextForms, thresholdFor, evolutionChance, runIdentity, formatTime } from "./evolution.js";
 import { placeholderSprite } from "./placeholder.js";
 import { statusSprites } from "./status-sprite.js";
-import { buildBiome, clearRoute, nearestGround, compareDepth, BIOME_TYPES, BIOME_LABELS } from "./biome.js";
+import { buildBiome, clearRoute, isWalkable, nearestGround, compareDepth, BIOME_TYPES, BIOME_LABELS } from "./biome.js";
 import { WORLD_HEIGHT } from "./biome-world.js";
 import { SPRITE_PATH, SPRITE_VERSION, TERRAIN_PATH, TERRAIN_VERSION } from "./asset-paths.js";
 import { boundedStep, separationStep, walkKeepsDistance } from "./movement.js";
 
 const DIRECTIONS = ["e", "se", "s", "sw", "w", "nw", "n", "ne"];
+const PLACEHOLDER_BOUNDS = [20.16, 18.24, 75.84, 77.76];
+
+function spriteBody([left, top, right, bottom], size) {
+  const scale = size / 96;
+  return {x: (left - 48) * scale, y: (top - 88) * scale,
+    w: (right - left) * scale, h: (bottom - top) * scale};
+}
+
+function walkingBody(bounds, size) {
+  // Keep room for every walking frame and the poses at the start and end of a step.
+  const [first, ...rest] = ["walk", "idle", "sleep"].flatMap(action => Object.values(bounds?.[action] ?? {}));
+  const envelope = rest.reduce((a, b) => [
+    Math.min(a[0], b[0]), Math.min(a[1], b[1]), Math.max(a[2], b[2]), Math.max(a[3], b[3]),
+  ], first ?? PLACEHOLDER_BOUNDS);
+  return spriteBody(envelope, size);
+}
 
 function startWalk(actor, x, y, now, speed) {
   const {motion} = actor;
@@ -168,13 +184,13 @@ export default class PokemonHabitat extends View {
         const manifest = await prepareArtwork("terrain");
         if (manifest.version !== TERRAIN_VERSION || manifest.path !== TERRAIN_PATH) throw new Error("Invalid terrain manifest");
         this.terrain = {state: "ready", path: manifest.path};
-        for (const motion of this.walkers.values()) {
+        for (const [address, motion] of this.walkers) {
           if (motion.walking) {
             const progress = Math.min(1, Math.max(0, (Date.now() - motion.started) / motion.duration));
             motion.x = motion.fromX + (motion.x - motion.fromX) * progress;
             motion.y = motion.fromY + (motion.y - motion.fromY) * progress;
           }
-          this.settleOnGround(motion);
+          this.settleOnGround(address, motion);
           motion.walking = false;
           motion.duration = 0;
           motion.action = "idle";
@@ -204,7 +220,7 @@ export default class PokemonHabitat extends View {
         try {
           const manifest = await prepareArtwork("sprites", number);
           if (manifest.version !== SPRITE_VERSION || manifest.number !== number) throw new Error("Invalid sprite manifest");
-          this.assets.set(number, {state: "ready", manifest});
+          this.assets.set(number, {state: "ready", manifest, body: walkingBody(manifest.bounds, this.spriteSize())});
         } catch (error) {
           const attempts = (previous?.attempts ?? 0) + 1;
           this.assets.set(number, {state: "failed", attempts, retry: Date.now() + Math.min(300000, 30000 * 2 ** (attempts - 1))});
@@ -272,13 +288,13 @@ export default class PokemonHabitat extends View {
     this.drag = null;
     this.hovered = null;
     const now = Date.now();
-    for (const motion of this.walkers.values()) {
+    for (const [address, motion] of this.walkers) {
       if (motion.walking) {
         const progress = Math.min(1, Math.max(0, (now - motion.started) / motion.duration));
         motion.x = motion.fromX + (motion.x - motion.fromX) * progress;
         motion.y = motion.fromY + (motion.y - motion.fromY) * progress;
       }
-      this.settleOnGround(motion);
+      this.settleOnGround(address, motion);
       Object.assign(motion, {walking: false, duration: 0, action: "idle", next: now + 500});
     }
   }
@@ -292,8 +308,26 @@ export default class PokemonHabitat extends View {
     return this.biomeLayout;
   }
 
-  settleOnGround(motion, body = null) {
-    const point = nearestGround(this.biome(), motion.x, motion.y, this.walkingBounds(), this.spriteSize() / 2, body);
+  terrainBody(address) {
+    return this.assets.get(this.pokemon[address]?.[0])?.body ?? spriteBody(PLACEHOLDER_BOUNDS, this.spriteSize());
+  }
+
+  groundFor(address, x, y) {
+    const biome = this.biome(), offset = this.spriteSize() / 2, body = this.terrainBody(address);
+    const point = nearestGround(biome, x, y, this.walkingBounds(), offset, body);
+    if (point) return point;
+    // A short sidebar can have no clear space in the usual walking strip.
+    const {width, height} = this.size;
+    const bounds = {
+      left: Math.max(0, -body.x) - offset, right: Math.min(width, width - body.x - body.w) - offset,
+      back: Math.max(0, -body.y), front: Math.min(height, height - body.y - body.h),
+    };
+    if (bounds.left > bounds.right || bounds.back > bounds.front) return null;
+    return nearestGround(biome, x, y, bounds, offset, body);
+  }
+
+  settleOnGround(address, motion) {
+    const point = this.groundFor(address, motion.x, motion.y);
     if (point) Object.assign(motion, point);
     return Boolean(point);
   }
@@ -362,12 +396,7 @@ export default class PokemonHabitat extends View {
     if (!this.drag) return;
     const {address, x, y} = this.drag;
     const motion = this.walker(address);
-    const scale = this.spriteSize() / 96;
-    const status = this.presence.get(address)?.agent.status ?? this.drag.status;
-    const [left, top, right, bottom] = this.spriteBounds(address, status).map(value => value * scale);
-    // A visible sprite can cover a canopy even when its ground anchor clears it.
-    const body = {x: left, y: top - 88 * scale, w: right - left, h: bottom - top};
-    if (!this.settleOnGround(motion, body)) Object.assign(motion, {x, y});
+    if (!this.settleOnGround(address, motion)) Object.assign(motion, {x, y});
     motion.next = Date.now() + 1500;
     this.drag = null;
     cx.notify();
@@ -378,7 +407,7 @@ export default class PokemonHabitat extends View {
       const bounds = this.walkingBounds();
       const x = bounds.left + Math.random() * (bounds.right - bounds.left);
       const y = bounds.back + Math.random() * (bounds.front - bounds.back);
-      const point = nearestGround(this.biome(), x, y, bounds, this.spriteSize() / 2) ?? {x, y};
+      const point = this.groundFor(address, x, y) ?? {x, y};
       this.walkers.set(address, {
         x: point.x, y: point.y,
         direction: "s", moveChance: .2, action: "idle", walking: false, duration: 0, next: Date.now() + 500 + Math.random() * 2000,
@@ -393,7 +422,8 @@ export default class PokemonHabitat extends View {
       if (!this.presence.has(address)) this.walkers.delete(address);
     }
     let changed = false;
-    const size = this.spriteSize(), scale = size / 96;
+    const size = this.spriteSize(), scale = size / 96, offset = size / 2;
+    const biome = this.biome();
     const companions = [];
     for (const {agent: {address, status}, phase} of this.presence.values()) {
       if (phase !== "active" || !this.pokemon[address]) continue;
@@ -424,19 +454,24 @@ export default class PokemonHabitat extends View {
       const currentTop = motion.y - size * 88 / 96;
       if (motion.x + right * scale <= 0 || motion.x + left * scale >= this.size.width ||
           currentTop + bottom * scale <= 0 || currentTop + top * scale >= this.size.height) continue;
+      const body = this.terrainBody(address);
+      if (separate && !dragging && !motion.walking && !isWalkable(biome, motion.x + offset, motion.y, 5, body)) {
+        // New artwork or a resize can leave a resting companion in the canopy.
+        if (this.settleOnGround(address, motion)) changed = true;
+      }
       // Use the resting sprite's width so turning or changing poses keeps the same spacing.
       const resting = this.assets.get(this.pokemon[address][0])?.manifest?.bounds?.idle?.s;
       const radius = (resting ? resting[2] - resting[0] : right - left) * scale / 2 + 4;
-      companions.push({address, status, motion, dragging, radius, x: motion.x, y: motion.y});
+      companions.push({address, status, motion, dragging, radius, body, x: motion.x, y: motion.y});
     }
     if (!companions.length) return changed;
 
-    const bounds = this.walkingBounds(), biome = this.biome(), offset = size / 2;
+    const bounds = this.walkingBounds();
     for (const actor of companions) {
-      const {address, status, motion, dragging} = actor;
+      const {address, status, motion, dragging, body} = actor;
       if (dragging || motion.walking) continue;
       const hovering = this.hovered === address;
-      const canReach = (x, y) => clearRoute(biome, motion.x + offset, motion.y, x + offset, y);
+      const canReach = (x, y) => clearRoute(biome, motion.x + offset, motion.y, x + offset, y, body);
       if (separate && !hovering) {
         const panel = this.panelBounds(address, status);
         // Separation can use more of the panel than a normal walk, especially
@@ -463,7 +498,12 @@ export default class PokemonHabitat extends View {
         continue;
       }
       if (hovering) continue;
-      const actions = [...new Set([...(manifest?.randomActions ?? []), manifest?.workAction].filter(action => action && action !== "idle"))];
+      const actions = [...new Set([...(manifest?.randomActions ?? []), manifest?.workAction])]
+        .filter(action => {
+          if (!action || action === "idle") return false;
+          const box = manifest?.bounds?.[action]?.[motion.direction];
+          return !box || isWalkable(biome, motion.x + offset, motion.y, 5, spriteBody(box, size));
+        });
       if (actions.length && Math.random() < motion.moveChance) {
         const available = actions.filter(action => action !== motion.lastGesture);
         const choices = available.length ? available : actions;
@@ -615,7 +655,7 @@ export default class PokemonHabitat extends View {
     const number = this.pokemon[address]?.[0];
     const asset = this.assets.get(number), motion = this.walker(address);
     const action = spriteAction(status, motion);
-    return asset?.manifest?.bounds?.[action]?.[motion.direction] ?? [20.16, 18.24, 75.84, 77.76];
+    return asset?.manifest?.bounds?.[action]?.[motion.direction] ?? PLACEHOLDER_BOUNDS;
   }
 
   pokemonSprite(address, status, size = this.spriteSize()) {

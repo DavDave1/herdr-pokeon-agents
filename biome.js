@@ -1,4 +1,4 @@
-import { getBiomeWorld, overlaps, WORLD_HEIGHT, CHUNK } from "./biome-world.js";
+import { getBiomeWorld, WORLD_HEIGHT, CHUNK } from "./biome-world.js";
 
 // Emerald metatiles are 16px, packaged at 3× with nearest-neighbor sampling.
 export const TILE = 32;
@@ -35,7 +35,7 @@ export function buildBiome(width, height, terrainPath = null, seed = 0, type = "
     scenery.push({...prop, id: `${type}-prop-${prop.id}`,
       path: asset(prop.kind), y, depth: prop.depth + offsetY});
     obstacles.push(prop.kind === "tree"
-      ? {x: prop.x, y, w: prop.w, h: prop.h}
+      ? {x: prop.x, y, w: prop.w, h: prop.h, kind: "tree"}
       : {x: prop.x + prop.w * .2, y: y + prop.h - TILE * .65, w: prop.w * .6, h: TILE * .6});
   };
   // Include neighboring owners so canopies and collisions remain correct at
@@ -64,27 +64,37 @@ export function compareDepth(a, b) {
   return a.depth - b.depth || (a.x ?? 0) - (b.x ?? 0);
 }
 
-export function isWalkable(biome, x, y, padding = 5) {
-  return !biome.obstacles.some(r => x > r.x - padding && x < r.x + r.w + padding && y > r.y - padding && y < r.y + r.h + padding);
+function crossesBox(fromX, fromY, x, y, left, top, right, bottom) {
+  if (Math.max(fromX, x) <= left || Math.min(fromX, x) >= right ||
+      Math.max(fromY, y) <= top || Math.min(fromY, y) >= bottom) return false;
+  if (fromX === x || fromY === y) return true;
+  const enterX = (left - fromX) / (x - fromX), exitX = (right - fromX) / (x - fromX);
+  const enterY = (top - fromY) / (y - fromY), exitY = (bottom - fromY) / (y - fromY);
+  return Math.max(0, Math.min(enterX, exitX), Math.min(enterY, exitY)) <
+    Math.min(1, Math.max(enterX, exitX), Math.max(enterY, exitY));
 }
 
-export function clearRoute(biome, fromX, fromY, x, y) {
-  const steps = Math.max(1, Math.ceil(Math.hypot(x - fromX, y - fromY) / 4));
-  for (let i = 0; i <= steps; i++) {
-    const t = i / steps;
-    if (!isWalkable(biome, fromX + (x - fromX) * t, fromY + (y - fromY) * t)) return false;
-  }
-  return true;
+function terrainClear(biome, fromX, fromY, x, y, padding, body) {
+  const crosses = (left, top, right, bottom) => crossesBox(fromX, fromY, x, y, left, top, right, bottom);
+  return !biome.obstacles.some(r => {
+    if (crosses(r.x - padding, r.y - padding, r.x + r.w + padding, r.y + r.h + padding)) return true;
+    // Expand the canopy by the sprite's bounds relative to its ground anchor.
+    // Testing the anchor against that box checks the sprite along the entire route.
+    return body && r.kind === "tree" && crosses(r.x - body.x - body.w, r.y - body.y - body.h,
+      r.x + r.w - body.x, r.y + r.h - body.y);
+  });
+}
+
+export function isWalkable(biome, x, y, padding = 5, body = null) {
+  return terrainClear(biome, x, y, x, y, padding, body);
+}
+
+export function clearRoute(biome, fromX, fromY, x, y, body = null) {
+  return terrainClear(biome, fromX, fromY, x, y, 5, body);
 }
 
 export function nearestGround(biome, x, y, bounds, offset, body = null) {
-  const trees = body ? biome.scenery.filter(prop => prop.kind === "tree") : [];
-  const canStand = (px, py) => {
-    if (!isWalkable(biome, px + offset, py)) return false;
-    if (!body) return true;
-    const sprite = {x: px + body.x, y: py + body.y, w: body.w, h: body.h};
-    return !trees.some(tree => overlaps(sprite, tree));
-  };
+  const canStand = (px, py) => isWalkable(biome, px + offset, py, 5, body);
   const clamp = (v, low, high) => Math.max(low, Math.min(high, v));
   x = clamp(x, bounds.left, bounds.right); y = clamp(y, bounds.back, bounds.front);
   if (canStand(x, y)) return {x, y};
