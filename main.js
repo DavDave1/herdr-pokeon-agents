@@ -4,9 +4,33 @@ import { agents, panes, spaces, run, setAgentOrder, exec, appHome, terminals, se
 
 import { families, infoFor, nextForms, thresholdFor, evolutionChance, runIdentity, formatTime } from "./evolution.js";
 import { placeholderSprite } from "./placeholder.js";
+import { statusSprites } from "./status-sprite.js";
 import { buildBiome, clearRoute, nearestGround, compareDepth, BIOME_TYPES, BIOME_LABELS } from "./biome.js";
 import { WORLD_HEIGHT } from "./biome-world.js";
 import { SPRITE_PATH, SPRITE_VERSION, TERRAIN_PATH, TERRAIN_VERSION } from "./asset-paths.js";
+import { boundedStep, separationStep, walkKeepsDistance } from "./movement.js";
+
+const DIRECTIONS = ["e", "se", "s", "sw", "w", "nw", "n", "ne"];
+
+function startWalk(actor, x, y, now, speed) {
+  const {motion} = actor;
+  const dx = x - motion.x, dy = y - motion.y;
+  const heading = Math.round(Math.atan2(dy / .55, dx) / (Math.PI / 4));
+  const duration = Math.round(Math.hypot(dx, dy) / speed * 1000);
+  Object.assign(motion, {
+    fromX: motion.x, fromY: motion.y, x, y, started: now, duration,
+    direction: DIRECTIONS[(heading + 8) % 8], action: "walk", walking: true,
+    sequence: (motion.sequence ?? 0) + 1, next: now + duration,
+  });
+  // Reserve the destination for the companions choosing their next step.
+  Object.assign(actor, {x, y});
+}
+
+function spriteAction(status, motion) {
+  if (motion.walking) return "walk";
+  if (status === "idle") return "sleep";
+  return status === "working" ? motion.action : "idle";
+}
 
 async function prepareArtwork(task, ...species) {
   const home = appHome();
@@ -50,7 +74,7 @@ export default class PokemonHabitat extends View {
     // Timers choose activity phases; native transitions and sprite cycles render each frame.
     cx.timer.every(250, cx => {
       const presenceChanged = this.syncPresence();
-      const movementChanged = this.advanceWalkers();
+      const movementChanged = this.advanceWalkers(true);
       if (presenceChanged || movementChanged) cx.notify();
       this.loadAnimations(cx);
       this.loadTerrain(cx);
@@ -358,20 +382,20 @@ export default class PokemonHabitat extends View {
     return this.walkers.get(address);
   }
 
-  advanceWalkers() {
-    const now = Date.now(), list = agents();
-    const live = new Set(this.presence.keys());
+  advanceWalkers(separate = false) {
+    const now = Date.now();
     for (const address of this.walkers.keys()) {
-      if (!live.has(address)) this.walkers.delete(address);
+      if (!this.presence.has(address)) this.walkers.delete(address);
     }
     let changed = false;
-    const bounds = this.walkingBounds();
-    for (const agent of list) {
-      if (this.drag?.address === agent.address) continue;
-      if (this.presence.get(agent.address)?.phase !== "active") continue;
-      const motion = this.walker(agent.address);
-      if (motion.status !== agent.status) {
-        if (motion.walking && agent.status !== "working") {
+    const size = this.spriteSize(), scale = size / 96;
+    const companions = [];
+    for (const {agent: {address, status}, phase} of this.presence.values()) {
+      if (phase !== "active" || !this.pokemon[address]) continue;
+      const motion = this.walker(address);
+      const dragging = this.drag?.address === address;
+      if (!dragging && motion.status !== status) {
+        if (motion.walking && status !== "working") {
           // Freeze at the visible position, rather than sliding to the old destination.
           const progress = Math.min(1, Math.max(0, (now - motion.started) / motion.duration));
           motion.x = motion.fromX + (motion.x - motion.fromX) * progress;
@@ -381,14 +405,49 @@ export default class PokemonHabitat extends View {
         }
         motion.moveChance = .2;
         motion.action = "idle";
-        motion.status = agent.status;
+        motion.status = status;
         motion.next = now + 150;
         changed = true;
       }
-      if (agent.status !== "working" || now < motion.next) continue;
-      const number = this.pokemon[agent.address]?.[0];
+      if (motion.walking && now >= motion.started + motion.duration) {
+        motion.walking = false;
+        motion.duration = 0;
+        if (status !== "working") motion.action = "idle";
+        changed = true;
+      }
+      const [left, top, right, bottom] = this.spriteBounds(address, status);
+      const currentTop = motion.y - size * 88 / 96;
+      if (motion.x + right * scale <= 0 || motion.x + left * scale >= this.size.width ||
+          currentTop + bottom * scale <= 0 || currentTop + top * scale >= this.size.height) continue;
+      // Use the resting sprite's width so turning or changing poses keeps the same spacing.
+      const resting = this.assets.get(this.pokemon[address][0])?.manifest?.bounds?.idle?.s;
+      const radius = (resting ? resting[2] - resting[0] : right - left) * scale / 2 + 4;
+      companions.push({address, status, motion, dragging, radius, x: motion.x, y: motion.y});
+    }
+    if (!companions.length) return changed;
+
+    const bounds = this.walkingBounds(), biome = this.biome(), offset = size / 2;
+    for (const actor of companions) {
+      const {address, status, motion, dragging} = actor;
+      if (dragging || motion.walking) continue;
+      const hovering = this.hovered === address;
+      const canReach = (x, y) => clearRoute(biome, motion.x + offset, motion.y, x + offset, y);
+      if (separate && !hovering) {
+        const panel = this.panelBounds(address, status);
+        // Separation can use more of the panel than a normal walk, especially
+        // in a short sidebar where the ordinary walking area is a single row.
+        const room = Math.max(0, panel.front - panel.back);
+        const gap = Math.min(38, room / 3);
+        const step = separationStep(actor, companions, {...panel, back: panel.back + gap}, canReach);
+        if (step) {
+          startWalk(actor, step.x, step.y, now, 52);
+          changed = true;
+          continue;
+        }
+      }
+      if (status !== "working" || now < motion.next) continue;
+      const number = this.pokemon[address]?.[0];
       const manifest = this.assets.get(number)?.manifest;
-      motion.walking = false;
       if (motion.action !== "idle") {
         // Let a full idle cycle settle the pose before drawing the next activity.
         const cycle = manifest?.durations?.idle ?? 1000;
@@ -398,10 +457,7 @@ export default class PokemonHabitat extends View {
         changed = true;
         continue;
       }
-      if (this.hovered === agent.address) {
-        if (motion.action !== "idle") { motion.action = "idle"; changed = true; }
-        continue;
-      }
+      if (hovering) continue;
       const actions = [...new Set([...(manifest?.randomActions ?? []), manifest?.workAction].filter(action => action && action !== "idle"))];
       if (actions.length && Math.random() < motion.moveChance) {
         const available = actions.filter(action => action !== motion.lastGesture);
@@ -414,33 +470,18 @@ export default class PokemonHabitat extends View {
         changed = true;
         continue;
       }
-      // Resizing may hide a Pokémon. Do not pull it back into the viewport
-      // when choosing its next walk; it can resume when the ground is revealed.
-      if (motion.x < bounds.left || motion.x > bounds.right || motion.y < bounds.back || motion.y > bounds.front) continue;
       // A single direction and shared duration keep a steady speed along the ground.
       const direction = Math.floor(Math.random() * 8) * Math.PI / 4;
       const distance = 24 + Math.random() * 44;
-      const x = Math.max(bounds.left, Math.min(bounds.right, motion.x + Math.cos(direction) * distance));
-      const y = Math.max(bounds.back, Math.min(bounds.front, motion.y + Math.sin(direction) * distance * .55));
+      const {x, y} = boundedStep(motion.x, motion.y,
+        Math.cos(direction) * distance, Math.sin(direction) * distance * .55, bounds);
       const length = Math.hypot(x - motion.x, y - motion.y);
-      const offset = this.spriteSize() / 2;
-      if (length < 8 || !clearRoute(this.biome(), motion.x + offset, motion.y, x + offset, y)) {
+      if (length < 8 || !walkKeepsDistance(actor, x, y, companions) || !canReach(x, y)) {
         motion.next = now + 500;
         continue;
       }
-      const heading = Math.round(Math.atan2((y - motion.y) / .55, x - motion.x) / (Math.PI / 4));
-      motion.direction = ["e", "se", "s", "sw", "w", "nw", "n", "ne"][(heading + 8) % 8];
-      motion.duration = Math.round(length / 34 * 1000);
-      motion.fromX = motion.x;
-      motion.fromY = motion.y;
-      motion.started = now;
-      motion.x = x;
-      motion.y = y;
-      motion.action = "walk";
+      startWalk(actor, x, y, now, 34);
       motion.moveChance = Math.min(1, Math.round((motion.moveChance + .1) * 100) / 100);
-      motion.sequence = (motion.sequence ?? 0) + 1;
-      motion.walking = true;
-      motion.next = now + motion.duration;
       changed = true;
     }
     return changed;
@@ -568,7 +609,7 @@ export default class PokemonHabitat extends View {
   spriteBounds(address, status) {
     const number = this.pokemon[address]?.[0];
     const asset = this.assets.get(number), motion = this.walker(address);
-    const action = status === "idle" ? "sleep" : status === "working" ? motion.action : "idle";
+    const action = spriteAction(status, motion);
     return asset?.manifest?.bounds?.[action]?.[motion.direction] ?? [20.16, 18.24, 75.84, 77.76];
   }
 
@@ -577,33 +618,17 @@ export default class PokemonHabitat extends View {
     if (!info) return div().size(size).text_size(11).child("Awaiting Pokémon");
     const {number} = info;
     const key = `pokemon-${address}`;
-    const sleeping = status === "idle";
     const motion = this.walker(address);
     const asset = this.assets.get(number);
     const ready = asset?.state === "ready";
-    const action = sleeping ? "sleep" : status === "working" ? motion.action : "idle";
+    const action = spriteAction(status, motion);
     const filename = ready ? (asset.manifest.animations[action]?.[motion.direction] ?? asset.manifest.animations.idle[motion.direction]) : null;
-    const box = this.spriteBounds(address, status);
-    const iconX = Math.min(size - 24, box[2] * size / 96 + 3);
-    const iconY = Math.max(2, box[1] * size / 96 - 14);
     const sprite = filename
       ? image(`${SPRITE_PATH}/${number}/${filename}`).size(size)
       : placeholderSprite(size);
     const body = div().id(key + "-body").absolute().left(0).top(0).size(size)
       .child(div().id(`${key}-${action}-${motion.sequence ?? 0}`).size(size).child(sprite));
     const scene = div().id(key).relative().size(size).flex_none().child(body);
-    if (status === "blocked" || status === "error") {
-      scene.child(div().id(key + "-alert").absolute().top(iconY).left(iconX).text_size(18).font_bold()
-        .text_color("#ffe6b2").child("!").loop("opacity", {from: .4, to: 1, period: 900}));
-    } else if (status === "done") {
-      scene.child(div().absolute().top(iconY).left(Math.max(0, box[0] * size / 96 - 8)).text_color("#fff0a8").text_size(16).frames(["✦", "·", "✧", "·"], 240));
-      scene.child(div().absolute().top(iconY + 12).left(iconX).text_color("#ffffff").text_size(12).frames(["·", "✧", "·", "✦"], 240));
-    } else if (sleeping) {
-      scene.child(div().id(key + "-sleep").absolute().top(iconY).left(iconX).text_color("#d5e4fa").text_size(12)
-        .frames(["z", "z Z", "z Z Z", "Z Z"], 900)
-        .loop("top", {from: iconY, to: iconY - 4, period: 3600, easing: "ease-in-out"})
-        .loop("opacity", {from: .55, to: 1, period: 3600, easing: "ease-in-out"}));
-    }
     if (asset?.state === "loading" || !asset) {
       scene.child(div().absolute().bottom(0).left(0).text_size(10).text_color("#f4f7e5")
         .frames(["Arriving", "Arriving ·", "Arriving ··", "Arriving ···"], 500));
@@ -648,6 +673,7 @@ export default class PokemonHabitat extends View {
         image(tile.path).absolute().left(tile.x).bottom(height - tile.y - tile.h).w(tile.w).h(tile.h))));
 
     if (!list.length) stage.child(div().absolute().left(25).bottom(45).text_color("#f0f8e8").text_size(13).child("Your Pokémon will arrive when an agent reports its status."));
+    const notifications = [];
     const actors = list.map(a => {
       const mon = this.pokemonInfo(a.address), hover = !this.drag && this.hovered === a.address;
       const motion = this.walker(a.address);
@@ -655,7 +681,8 @@ export default class PokemonHabitat extends View {
       const x = motion.x, feet = motion.y;
       // Animate inside a fixed-height, bottom-anchored container: resizing
       // moves the container with terrain without changing animation targets.
-      const top = feet - (height - WORLD_HEIGHT) - spriteSize * 88 / 96;
+      const bodyTop = feet - spriteSize * 88 / 96;
+      const top = bodyTop - (height - WORLD_HEIGHT);
       const anchored = actor => div().id(`pokemon-anchor-${a.address}`).absolute()
         .left(0).bottom(0).w(width).h(WORLD_HEIGHT).child(actor);
       const presence = this.presence.get(a.address);
@@ -671,6 +698,8 @@ export default class PokemonHabitat extends View {
       const tab = spaces().find(s => s.id === a.space)?.tabs.find(tab => tab.id === a.tab);
       const summary = (a.title || detail?.title || (tab?.named ? tab.name : "") || a.program?.name || "Agent").trim();
       const box = this.spriteBounds(a.address, a.status).map(value => value * spriteSize / 96);
+      if (mon) notifications.push({address: a.address, status: a.status, duration: motion.duration,
+        bounds: [x + box[0], bodyTop + box[1], x + box[2], bodyTop + box[3]]});
       // Anchor the popup to the visible silhouette, not transparent canvas padding.
       const trigger = div().id(`pokemon-hit-${a.address}`).w(box[2] - box[0]).h(box[3] - box[1])
         .cursor_pointer()
@@ -744,6 +773,7 @@ export default class PokemonHabitat extends View {
     });
     actors.sort(compareDepth);
     for (const item of actors) stage.child(item.actor);
+    stage.children(statusSprites(notifications, this.size));
     stage.child(h_flex().absolute().top(10).left(14).right(14).items_center().justify_between()
       .child(div().px(10).py(5).rounded(6).bg("#132e25e8").text_size(12).text_color("#edf8dc")
         .child(`${BIOME_LABELS[this.biomeType]} · ${agents().length} agent${agents().length === 1 ? "" : "s"}`))
