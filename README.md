@@ -1,29 +1,40 @@
 # Pokémon Agents
 
-A Pokémon habitat for your agents in Herdr, with an Emerald forest clearing, paths, tall grass, a pond and trees. Agents roam on walkable ground; right-click and drag them to move them around the clearing. Left-click a Pokémon to select its agent.
+Turn a Herdr panel into a roaming Pokémon habitat for your coding agents. Left-click a companion to open its agent. Right-click and drag to move it. Hover for agent status and accumulated working time.
 
-Choose **Forest, Desert, Cave or Mountain** under **Options → Biome**. Each habitat saves its type and a random biome seed, keeping its landscape consistent across reloads. Choose **Options → Generate new biome** for a different landscape. Seeds vary winding roads, forks, crossroads, clearings, pools, boundary ledges, and prop clusters. Forests mix groves and rocks; deserts have sparse boulders and occasional oases; caves favor gravel and pools; mountains favor scree and rock clusters. Resizing reveals or clips the same terrain, anchored to the bottom-left; the northern treeline and rock ledge follow the top edge.
+Choose **Options → Biome** to switch between Forest, Desert, Cave, and Mountain. Each habitat saves its biome and seed. Resizing reveals more of the same landscape, and **Options → Generate new biome** creates a new one. Companions can evolve as their agents accumulate working time.
 
 ## Install
 
-1. Install Herdr and make sure `herdr-app` is available in your terminal. Optional terrain and SpriteCollab animation downloads require Python 3 with Pillow installed.
-2. Download this repository and copy its contents into `~/.config/herdr-app/mods/pokemon-agents/` (including `mod.json`, `main.js`, the other JavaScript and Python files, and `tiles/`). If you set `HERDR_APP_HOME`, use `$HERDR_APP_HOME/mods/pokemon-agents/` instead.
-3. With Herdr running and a space selected, open the mod in a new tab:
+1. Install Herdr. This mod was tested with Herdr 0.1.16. [Herdr installation](https://github.com/herdrdev/herdr-app)
+2. Download the release source and place the extracted folder at `~/.config/herdr-app/mods/pokemon-agents/`. Use `$HERDR_APP_HOME/mods/pokemon-agents/` if you set `HERDR_APP_HOME`. The folder should contain `mod.json` and `main.js` at its root.
+3. For downloaded terrain, Pokémon sprites, and evolution effects, install Node.js 22 or newer with npm. Run `npm ci` in the mod folder and make sure Herdr can find `node` on its PATH. A grass tile and generic companions are available while artwork downloads or when the helper is unavailable.
+4. With Herdr running and a space selected, open the habitat in a tab.
 
    ```sh
    herdr-app do tab.new '{"name":"Pokémon","mod":"pokemon-agents"}'
    ```
 
-To show the habitat below your focused pane instead:
+To use the habitat as your Agents panel, open a personal layout or duplicate the shipped one.
 
 ```sh
-herdr-app do pane.split '{"direction":"down","mod":"pokemon-agents"}'
+herdr-app do layout.clone '{"name":"main","as":"pokemon-agents"}'
 ```
 
-## Artwork attribution
+In the personal layout's JSON file under Herdr's `layouts/` directory, find the block with `"id": "agents"` and set its `content` to `{"mod":"pokemon-agents"}`. Herdr applies the edit live.
 
-No third-party terrain or character sprite assets are shipped in this repository. A single original placeholder grass tile is shown while terrain downloads or if it is unavailable. Terrain is downloaded and generated on demand in Herdr’s data directory; see [ASSETS.md](ASSETS.md) for sources and rights information. A generic placeholder is drawn directly in the UI while animations load or if a download fails. Optional animation artwork comes from [SpriteCollab](https://sprites.pmdcollab.org/) ([source repository](https://github.com/PMDCollab/SpriteCollab)). Community contributions are subject to [CC BY-NC 4.0](https://creativecommons.org/licenses/by-nc/4.0/), requiring attribution and noncommercial use; see the [upstream reuse policy](https://github.com/PMDCollab/SpriteCollab#submission-and-use-policy). Downloaded animation packs retain per-species `credits.txt` and `ATTRIBUTION.txt` files in Herdr's `data/pokemon-agents/v4/` directory. Animations are converted to WebP, scaled, and composed into release, recall, and evolution effects.
+## Development
 
-Sprites are downloaded on demand into Herdr’s data directory, outside this repository. The generic companion is shown while downloads load or fail. Downloads and cache reuse are not filtered by artwork credits.
+Run these commands from the mod folder.
 
-SpriteCollab also includes official Chunsoft artwork; its community contribution license does not grant rights to that artwork or to the underlying Pokémon characters. Third-party artwork is excluded from any MIT license applied to this project's code.
+```sh
+npm ci
+npm test
+herdr-app check .
+```
+
+Herdr loads the panel as JavaScript from `main.js`. The panel calls a separate Node.js process to download and prepare artwork. The tests run offline.
+
+## License and artwork
+
+The MIT license covers this project's code and original placeholder artwork. Optional artwork is fetched from SpriteCollab and pret's Pokémon Emerald archive. For source credits, cache locations, and artwork terms, see [ASSETS.md](ASSETS.md). [MIT license](LICENSE)

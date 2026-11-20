@@ -1,15 +1,25 @@
 import { View, div, image } from "gpui-kit";
 import { v_flex, h_flex, Popup, Popover } from "gpui-base";
-import { agents, panes, spaces, run, setAgentOrder, exec, appHome, terminals, settings } from "herdr";
+import { agents, panes, spaces, run, setAgentOrder, exec, appHome, terminals, settings, checking } from "herdr";
 
-import { families, familyFor, infoFor, nextForms, thresholdFor, evolutionChance, runIdentity, formatTime } from "./evolution.js";
+import { families, infoFor, nextForms, thresholdFor, evolutionChance, runIdentity, formatTime } from "./evolution.js";
 import { placeholderSprite } from "./placeholder.js";
 import { buildBiome, clearRoute, nearestGround, compareDepth, BIOME_TYPES, BIOME_LABELS } from "./biome.js";
+import { WORLD_HEIGHT } from "./biome-world.js";
+import { SPRITE_PATH, SPRITE_VERSION, TERRAIN_PATH, TERRAIN_VERSION } from "./asset-paths.js";
+
+async function prepareArtwork(task, ...species) {
+  const home = appHome();
+  const result = await exec("node", [`${home}/mods/pokemon-agents/assets/prepare.js`, home, task, ...species.map(String)],
+    { timeout: 120_000 });
+  if (result.code !== 0) throw new Error(result.stderr.trim() || `Artwork helper failed for ${task}`);
+  return JSON.parse(result.stdout);
+}
 
 export default class PokemonHabitat extends View {
   init(_props, cx) {
     this.pokemon = JSON.parse(localStorage.getItem("pokemon") ?? "{}");
-    this.size = {width: 1000, height: 270};
+    this.size = {width: 1000, height: WORLD_HEIGHT};
     const storedSeed = localStorage.getItem("biome-seed");
     const parsedSeed = storedSeed === null ? NaN : Number(storedSeed);
     this.biomeSeed = Number.isInteger(parsedSeed) && parsedSeed >= 0 && parsedSeed <= 0xffffffff
@@ -20,20 +30,19 @@ export default class PokemonHabitat extends View {
     this.panelPixels = null;
     this.hovered = null;
     this.drag = null;
-    const savedSize = localStorage.getItem("sprite-size");
-    this.spriteSizeChoice = ["small", "medium", "big"].includes(savedSize) ? savedSize : "medium";
     this.optionsOpen = false;
     this.walkers = new Map();
     this.presence = new Map();
     this.assets = new Map();
     this.downloads = 0;
     this.terrain = {state: "pending"};
-    this.loadTerrain(cx);
     this.evolution = JSON.parse(localStorage.getItem("evolution-progress") ?? "{}");
     this.evolutionEffects = new Map();
     this.lastWorkSample = Date.now();
     this.lastWorkSave = Date.now();
     this.previousWorking = new Set();
+    if (checking()) return;
+    this.loadTerrain(cx);
     cx.timer.every(1000, cx => {
       this.trackWorkingTime(cx);
       this.prepareEvolutions(cx);
@@ -59,7 +68,7 @@ export default class PokemonHabitat extends View {
       }
       entry.agent = agent;
       const number = this.pokemon[agent.address]?.[0], asset = this.assets.get(number);
-      if (entry.phase === "loading" && ["ready", "failed"].includes(asset?.state)) {
+      if (entry.phase === "loading" && this.drag?.address !== agent.address && ["ready", "failed"].includes(asset?.state)) {
         entry.phase = "release";
         entry.started = now;
         // Keep the same artwork for the whole effect if a download completes mid-cycle.
@@ -120,12 +129,10 @@ export default class PokemonHabitat extends View {
     const entry = this.presence.get(address);
     if (entry.phase === "evolution") return div().id(`evolution-${address}-${entry.started}`).size(size)
       .child(image(entry.effect).size(size));
-    if (entry.phase === "loading") return div().size(size);
     if (!entry.cached) return placeholderSprite(size);
     const number = this.pokemon[address]?.[0];
-    const folder = `v4/${number}`;
     return div().id(`pokeball-${address}-${entry.phase}-${entry.started}`).size(size)
-      .child(image(`data/pokemon-agents/${folder}/${entry.phase}.webp`).size(size));
+      .child(image(`${SPRITE_PATH}/${number}/${entry.phase}.webp`).size(size));
   }
 
   loadTerrain(cx) {
@@ -134,10 +141,8 @@ export default class PokemonHabitat extends View {
     this.terrain = {state: "loading", attempts};
     cx.spawn(async cx => {
       try {
-        const result = await exec("python3", [`${appHome()}/mods/pokemon-agents/package_tiles.py`]);
-        if (result.code !== 0) throw new Error(result.stderr || "Terrain download failed");
-        const manifest = JSON.parse(result.stdout);
-        if (manifest.version !== 9 || manifest.path !== "data/pokemon-agents/terrain/emerald-v9") throw new Error("Invalid terrain manifest");
+        const manifest = await prepareArtwork("terrain");
+        if (manifest.version !== TERRAIN_VERSION || manifest.path !== TERRAIN_PATH) throw new Error("Invalid terrain manifest");
         this.terrain = {state: "ready", path: manifest.path};
         for (const motion of this.walkers.values()) {
           if (motion.walking) {
@@ -173,10 +178,8 @@ export default class PokemonHabitat extends View {
       this.downloads++;
       cx.spawn(async cx => {
         try {
-          // The helper validates cached files before returning, and only downloads missing packs.
-          const result = await exec("python3", [`${appHome()}/mods/pokemon-agents/package_sprites.py`, String(number)]);
-          if (result.code !== 0) throw new Error(result.stderr || "Sprite download failed");
-          const manifest = JSON.parse(result.stdout);
+          const manifest = await prepareArtwork("sprites", number);
+          if (manifest.version !== SPRITE_VERSION || manifest.number !== number) throw new Error("Invalid sprite manifest");
           this.assets.set(number, {state: "ready", manifest});
         } catch (error) {
           const attempts = (previous?.attempts ?? 0) + 1;
@@ -191,38 +194,22 @@ export default class PokemonHabitat extends View {
   }
 
   spriteSize() {
-    const requested = {small: 105.6, medium: 158.4, big: 211.2}[this.spriteSizeChoice];
-    return Math.max(1, Math.min(requested, this.size.width, this.size.height,
-      Math.max(48, this.size.height - 64), Math.max(48, this.size.width - 12)));
+    return 158.4;
   }
 
   updatePanelSize() {
     if (!this.panelPixels) return;
     const zoom = Number(settings().zoom) || 1;
     // on_size_change reports painted logical pixels; numeric styles apply zoom.
-    this.size = {width: this.panelPixels.width / zoom, height: this.panelPixels.height / zoom};
-  }
-
-  selectSpriteSize(choice) {
-    this.spriteSizeChoice = choice;
-    localStorage.setItem("sprite-size", choice);
-    this.optionsOpen = false;
-    const now = Date.now(), bounds = this.walkingBounds();
+    const size = {width: this.panelPixels.width / zoom, height: this.panelPixels.height / zoom};
+    const deltaY = size.height - this.size.height;
+    // Match the terrain's bottom-left anchor without changing walk progress.
     for (const motion of this.walkers.values()) {
-      if (motion.walking) {
-        const progress = Math.min(1, Math.max(0, (now - motion.started) / motion.duration));
-        motion.x = motion.fromX + (motion.x - motion.fromX) * progress;
-        motion.y = motion.fromY + (motion.y - motion.fromY) * progress;
-      }
-      motion.x = Math.max(bounds.left, Math.min(bounds.right, motion.x));
-      motion.y = Math.max(bounds.back, Math.min(bounds.front, motion.y));
-      this.settleOnGround(motion);
-      motion.walking = false;
-      motion.duration = 0;
-      motion.moveChance = .2;
-      motion.action = "idle";
-      motion.next = now + 150;
+      motion.y += deltaY;
+      if (motion.fromY !== undefined) motion.fromY += deltaY;
     }
+    if (this.drag) this.drag.y += deltaY;
+    this.size = size;
   }
 
   optionsMenu() {
@@ -235,17 +222,6 @@ export default class PokemonHabitat extends View {
       .trigger(trigger)
       .content(v_flex().w(180).p(8).gap(4).rounded(8).border(1).border_color("#446b56")
         .bg("#fff9e8").text_color("#20372d").text_size(12)
-        .child(div().px(8).py(4).font_semibold().child("Sprite size"))
-        .children(["small", "medium", "big"].map(choice => {
-          const selected = choice === this.spriteSizeChoice;
-          return h_flex().id(`pokemon-size-${choice}`).px(8).py(7).rounded(5).justify_between()
-            .bg(selected ? "#cfe6ce" : "#fff9e8").cursor_pointer()
-            .hover(style => style.bg("#dfedda"))
-            .on_click((_event, cx) => { this.selectSpriteSize(choice); cx.notify(); })
-            .child(choice[0].toUpperCase() + choice.slice(1))
-            .child(selected ? "✓" : "");
-        }))
-        .child(div().h(1).my(5).bg("#c5d5c0"))
         .child(div().px(8).py(4).font_semibold().child("Biome"))
         .children(BIOME_TYPES.map(type => h_flex().id(`pokemon-biome-${type}`).px(8).py(7).rounded(5).justify_between()
           .bg(type === this.biomeType ? "#cfe6ce" : "#fff9e8").cursor_pointer()
@@ -317,7 +293,6 @@ export default class PokemonHabitat extends View {
   }
 
   startDrag(address, event, cx) {
-    if (event.modifiers.control && event.modifiers.shift) return;
     const status = this.presence.get(address)?.agent.status;
     const box = this.spriteBounds(address, status).map(value => value * this.spriteSize() / 96);
     const motion = this.walker(address), now = Date.now();
@@ -439,6 +414,9 @@ export default class PokemonHabitat extends View {
         changed = true;
         continue;
       }
+      // Resizing may hide a Pokémon. Do not pull it back into the viewport
+      // when choosing its next walk; it can resume when the ground is revealed.
+      if (motion.x < bounds.left || motion.x > bounds.right || motion.y < bounds.back || motion.y > bounds.front) continue;
       // A single direction and shared duration keep a steady speed along the ground.
       const direction = Math.floor(Math.random() * 8) * Math.PI / 4;
       const distance = 24 + Math.random() * 44;
@@ -559,9 +537,8 @@ export default class PokemonHabitat extends View {
         this.evolutionEffects.set(key, {state:"loading"});
         cx.spawn(async cx => {
           try {
-            const result = await exec("python3", [`${appHome()}/mods/pokemon-agents/evolution_effect.py`, String(number), String(next)]);
-            if (result.code !== 0) throw new Error(result.stderr || "Evolution effect failed");
-            this.evolutionEffects.set(key, {state:"ready", ...JSON.parse(result.stdout)});
+            const effect = await prepareArtwork("evolution", number, next);
+            this.evolutionEffects.set(key, {state:"ready", ...effect});
           } catch (error) {
             this.evolutionEffects.set(key, {state:"failed", retry:Date.now() + 30000});
             console.log(`Evolution ${key}: ${error}`);
@@ -582,40 +559,6 @@ export default class PokemonHabitat extends View {
       if (this.hovered === agent.address) this.hovered = null;
       cx.notify();
     }
-  }
-
-  // Hidden testing shortcuts reuse the normal download, reservation and effect pipeline.
-  debugEvolution(address, restore, cx) {
-    const entry = this.presence.get(address), mon = this.pokemon[address];
-    if (!mon || !entry || !["active", "evolution"].includes(entry.phase)) return;
-    this.trackWorkingTime(cx);
-    const record = this.evolution[address];
-    if (!record) return;
-    if (restore) {
-      const base = families[familyFor(mon[0])]?.[0];
-      if (!base) return;
-      const occupied = Object.entries(this.pokemon).some(([other, value]) => other !== address && value[0] === base[0]) ||
-        Object.entries(this.evolution).some(([other, progress]) => other !== address && progress.target?.[0] === base[0]);
-      if (occupied) return;
-      const now = Date.now(), motion = this.walker(address);
-      if (motion.walking) {
-        const progress = Math.max(0, Math.min(1, (now - motion.started) / motion.duration));
-        motion.x = motion.fromX + (motion.x - motion.fromX) * progress;
-        motion.y = motion.fromY + (motion.y - motion.fromY) * progress;
-      }
-      Object.assign(motion, {walking:false, duration:0, action:"idle", next:now + 1000});
-      this.pokemon[address] = base;
-      Object.assign(record, {base, form:base[0], workingMs:0, due:false, target:null});
-      entry.phase = "active";
-      localStorage.setItem("pokemon", JSON.stringify(this.pokemon));
-    } else {
-      if (entry.phase !== "active" || !nextForms(mon[0]).length) return;
-      record.due = true;
-    }
-    this.saveEvolution();
-    this.prepareEvolutions(cx);
-    this.loadAnimations(cx);
-    cx.notify();
   }
 
   workSummary(address) {
@@ -644,7 +587,7 @@ export default class PokemonHabitat extends View {
     const iconX = Math.min(size - 24, box[2] * size / 96 + 3);
     const iconY = Math.max(2, box[1] * size / 96 - 14);
     const sprite = filename
-      ? image(`data/pokemon-agents/v4/${number}/${filename}`).size(size)
+      ? image(`${SPRITE_PATH}/${number}/${filename}`).size(size)
       : placeholderSprite(size);
     const body = div().id(key + "-body").absolute().left(0).top(0).size(size)
       .child(div().id(`${key}-${action}-${motion.sequence ?? 0}`).size(size).child(sprite));
@@ -698,38 +641,28 @@ export default class PokemonHabitat extends View {
         if (this.panelPixels?.width !== size.width || this.panelPixels?.height !== size.height) {
           this.panelPixels = size;
           this.updatePanelSize();
-          for (const motion of this.walkers.values()) {
-            this.settleOnGround(motion);
-            motion.walking = false;
-            motion.duration = 0;
-            motion.action = "idle";
-            motion.next = Date.now() + 500;
-          }
           cx.notify();
         }
       })
       .child(div().absolute().inset_0().children(this.biome().ground.map(tile =>
-        image(tile.path).absolute().left(tile.x).top(tile.y).w(tile.w).h(tile.h))));
+        image(tile.path).absolute().left(tile.x).bottom(height - tile.y - tile.h).w(tile.w).h(tile.h))));
+
     if (!list.length) stage.child(div().absolute().left(25).bottom(45).text_color("#f0f8e8").text_size(13).child("Your Pokémon will arrive when an agent reports its status."));
     const actors = list.map(a => {
       const mon = this.pokemonInfo(a.address), hover = !this.drag && this.hovered === a.address;
       const motion = this.walker(a.address);
       const spriteSize = this.spriteSize(), actorSize = spriteSize;
-      const bounds = this.panelBounds(a.address, a.status);
-      const x = Math.max(bounds.left, Math.min(bounds.right, motion.x));
-      const feet = Math.max(bounds.back, Math.min(bounds.front, motion.y));
-      // All supplied sprites have eight transparent pixels below their feet.
-      const top = feet - spriteSize * 88 / 96;
+      const x = motion.x, feet = motion.y;
+      // Animate inside a fixed-height, bottom-anchored container: resizing
+      // moves the container with terrain without changing animation targets.
+      const top = feet - (height - WORLD_HEIGHT) - spriteSize * 88 / 96;
+      const anchored = actor => div().id(`pokemon-anchor-${a.address}`).absolute()
+        .left(0).bottom(0).w(width).h(WORLD_HEIGHT).child(actor);
       const presence = this.presence.get(a.address);
-      if (presence.phase !== "active" && mon) {
+      if (["release", "recall", "evolution"].includes(presence.phase) && mon) {
         return {
-          actor: div().id(`roaming-${a.address}`).absolute().left(x).top(top).size(actorSize)
-            .child(this.presenceSprite(a.address, spriteSize))
-            .on_mouse_down("right", (event, cx) => {
-              if (presence.phase !== "evolution" || !event.modifiers.control || !event.modifiers.shift) return;
-              cx.stop_propagation();
-              this.debugEvolution(a.address, true, cx);
-            }),
+          actor: anchored(div().id(`roaming-${a.address}`).absolute().left(x).top(top).size(actorSize)
+            .child(this.presenceSprite(a.address, spriteSize))),
           depth: feet,
         };
       }
@@ -742,22 +675,10 @@ export default class PokemonHabitat extends View {
       const trigger = div().id(`pokemon-hit-${a.address}`).w(box[2] - box[0]).h(box[3] - box[1])
         .cursor_pointer()
         .on_hover((on, cx) => { if (this.drag) return; this.hovered = on ? a.address : this.hovered === a.address ? null : this.hovered; cx.notify(); })
-        .on_click((event, cx) => {
-          if (event.modifiers.control && event.modifiers.shift) {
-            cx.stop_propagation();
-            this.debugEvolution(a.address, false, cx);
-            return;
-          }
+        .on_click(() => {
           if (a.pane) run("pane.focus", {pane:a.pane}); else run("terminal.peek", {terminal:a.address});
         })
-        .on_mouse_down("right", (event, cx) => {
-          if (event.modifiers.control && event.modifiers.shift) {
-            cx.stop_propagation();
-            this.debugEvolution(a.address, true, cx);
-            return;
-          }
-          this.startDrag(a.address, event, cx);
-        });
+        .on_mouse_down("right", (event, cx) => this.startDrag(a.address, event, cx));
       const popup = Popup.new(`agent-bubble-${a.address}`, trigger).anchor("bottom_left");
       const dragging = this.drag?.address === a.address;
       const actor = div().id(`${dragging ? "dragging" : "roaming"}-${a.address}`).absolute().left(x).top(top).w(actorSize).h(actorSize)
@@ -769,29 +690,56 @@ export default class PokemonHabitat extends View {
         const space = spaces().find(s => s.id === a.space);
         const title = summary;
         const bubbleWidth = Math.min(280, Math.max(200, width - 24));
-        popup.content(v_flex().w(bubbleWidth).p(12).gap(5)
-          .rounded(12).border(2).border_color("#263b32").bg("#fff9e8").text_color("#20372d").text_size(12)
-          .child(h_flex().justify_between().gap(5).child(div().font_bold().child(mon.name))
-            .child(div().text_size(10).child(`${mon.type} · ${status}`)))
-          .child(div().font_semibold().truncate().child(a.space_name || space?.name || "Agent"))
-          .child(div().truncate().child(title))
-          .child(div().text_size(10).text_color("#526457").truncate().child(`${a.program?.name || "Agent"} · ${a.address}`))
-          .child(div().text_size(10).text_color("#526457").child(this.workSummary(a.address)))
-          .child(div().text_size(10).text_color("#526457").child("Left-click to focus agent · Right-drag to move"))
-          .child(div().text_size(10).text_color("#526457").child(
-            this.assets.get(mon.number)?.state === "ready" ? "SpriteCollab · artist credits saved with sprites" :
-            this.assets.get(mon.number)?.state === "failed" ? "Generic companion · download will retry" : "Downloading animation cycles…")));
+        // A pixel-edged Pokédex shell surrounds a biome-tinted LCD screen.
+        const palette = {
+          forest: {edge: "#243e35", frame: "#79a877", paper: "#f3f4d9", ink: "#293e32", muted: "#536650"},
+          desert: {edge: "#59432f", frame: "#c9a265", paper: "#fff0cb", ink: "#503c2d", muted: "#796044"},
+          cave: {edge: "#302e46", frame: "#8e86a5", paper: "#eeebf5", ink: "#39364e", muted: "#696078"},
+          mountain: {edge: "#2e414d", frame: "#8ba7af", paper: "#edf2e9", ink: "#314752", muted: "#5b7078"},
+        }[this.biomeType];
+        const statusColor = {working: "#32664b", blocked: "#934333", done: "#355a8a", idle: "#605b69"}[a.status] || palette.muted;
+        const lamp = color => div().size(7).flex_none().border(1).border_color("#512635").bg(color);
+        popup.content(div().w(bubbleWidth).p(3).rounded(3).bg("#492531")
+          .font_family("JetBrains Mono").text_color(palette.ink).text_size(11)
+          .child(v_flex().p(8).gap(8).border(2).border_color("#f08379").bg("#be4050")
+            .child(h_flex().items_center().gap(6)
+              .child(div().size(25).p(3).flex_none().border(2).border_color("#fff0d8").bg("#34657d")
+                .child(div().size_full().bg("#75d9e8").child(div().size(5).bg("#e5ffff"))))
+              .child(lamp("#ef8a7e")).child(lamp("#f7d676")).child(lamp("#8cc589"))
+               .child(div().flex_1())
+               .child(div().font_bold().text_size(9).text_color("#fff0d8").child("POKÉDEX")))
+             .child(div().h(2).bg("#842e43"))
+            .child(div().p(4).border(2).border_color("#752d3b").bg("#dfdac5")
+              .child(v_flex().p(8).gap(7).border(2).border_color(palette.edge).bg(palette.paper)
+               .child(h_flex().justify_between().gap(6).text_size(8).text_color(palette.muted)
+                 .child(div().flex_1().min_w(0).text_size(10).child(`${a.space_name || space?.name || "Agent"} - ${a.program?.name || "Agent"}`))
+                 .child(div().flex_none().child(`No.${String(mon.number).padStart(3, "0")}`)))
+                .child(h_flex().items_center().gap(7)
+                  .child(div().w(6).h(18).flex_none().bg(mon.color))
+                  .child(div().flex_1().min_w(0).font_bold().text_size(14).truncate().child(mon.name))
+                 .child(div().flex_none().px(5).py(2).border(1).border_color(palette.edge).bg(mon.color)
+                   .text_color("#202b30").font_bold().text_size(9).child(mon.type.toUpperCase())))
+                .child(div().h(2).bg(palette.frame))
+                .child(v_flex().gap(6)
+                  .child(div().text_size(10).font_bold().text_color(statusColor)
+                    .child(`${status.toUpperCase()} - ${this.workSummary(a.address)}`))
+                  .child(div().font_semibold().child(title)))))
+            .child(h_flex().items_center().gap(8)
+              .child(div().w(20).h(6).bg("#492531"))
+              .child(div().flex_1().min_w(0).px(5).py(3).border(1).border_color("#492531")
+                .bg(palette.frame).text_size(8).child(
+                  this.assets.get(mon.number)?.state === "ready" ? "SpriteCollab · credits saved with sprites" :
+                  this.assets.get(mon.number)?.state === "failed" ? "Generic companion · download will retry" : "Downloading animation cycles…"))
+              .child(h_flex().gap(2).children([0, 1, 2].map(() => div().w(2).h(10).bg("#842e43")))))));
 
       }
       actor.child(div().absolute().left(box[0]).top(box[1]).w(box[2] - box[0]).h(box[3] - box[1]).child(popup));
-      return {actor, depth: feet};
+      return {actor: anchored(actor), depth: feet};
     });
-    // Draw the back of the meadow first so nearer Pokémon occlude distant ones.
+    // Draw distant scenery and agents first so nearer objects can overlap them.
     for (const prop of this.biome().scenery) actors.push({
-      // Give each tree its own clipped paint bounds and stable identity, just
-      // like actors, so overlapping image draws retain the shared painter order.
-      actor: div().id(prop.id).absolute().left(prop.x).top(prop.y + (prop.clipTop ?? 0)).w(prop.w).h(prop.h - (prop.clipTop ?? 0)).overflow_hidden()
-        .child(image(prop.path).absolute().left(0).top(-(prop.clipTop ?? 0)).w(prop.w).h(prop.h)),
+      actor: div().id(prop.id).absolute().left(prop.x).bottom(height - prop.y - prop.h).w(prop.w).h(prop.h)
+        .overflow_hidden().child(image(prop.path).w(prop.w).h(prop.h)),
       depth: prop.depth, x: prop.x,
     });
     actors.sort(compareDepth);

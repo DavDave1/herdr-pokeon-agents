@@ -3,14 +3,8 @@
 /.codex/
 /.aws/
 
-# Python bytecode and tool caches
-__pycache__/
-*.py[cod]
-.pytest_cache/
-.mypy_cache/
-.ruff_cache/
-.venv/
-venv/
+# Local dependencies
+/node_modules/
 
 # Runtime data and caches (normally stored outside this repository)
 /data/

@@ -17,7 +17,7 @@ const types = [["Grass","#56b879"],["Fire","#f28b51"],["Water","#60a9e0"],
   ["Electric","#edc850"],["Fairy","#e99abf"],["Normal","#baad8d"],
   ["Water","#70b9d4"],["Fire","#e9a369"],["Ghost","#ad8cdb"],
   ["Normal","#c69b70"],["Normal","#77a99c"],["Dragon","#8e9fea"]];
-export function familyFor(number) { return families.findIndex(line => line.some(mon => mon[0] === number)); }
+function familyFor(number) { return families.findIndex(line => line.some(mon => mon[0] === number)); }
 export function infoFor(mon) {
   const index = familyFor(mon[0]);
   let [type,color] = types[index] ?? ["Normal","#baad8d"];

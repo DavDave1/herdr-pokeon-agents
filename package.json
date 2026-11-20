@@ -1,0 +1,19 @@
+{
+  "name": "herdr-pokemon-agents",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "license": "MIT",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "test": "node --test"
+  },
+  "dependencies": {
+    "fast-xml-parser": "5.12.1",
+    "proper-lockfile": "4.1.2",
+    "sharp": "0.35.5",
+    "upng-js": "2.1.0"
+  }
+}
