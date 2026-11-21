@@ -1,6 +1,6 @@
 import { isAbsolute } from "node:path";
 import { prepareEvolution } from "./effects.js";
-import { prepareSprites } from "./sprites.js";
+import { prepareSprites, prepareMove } from "./sprites.js";
 import { prepareTerrain } from "./terrain.js";
 
 function speciesNumber(value) {
@@ -19,6 +19,9 @@ try {
       break;
     case "sprites":
       result = await prepareSprites(appHome, speciesNumber(first));
+      break;
+    case "move":
+      result = await prepareMove(appHome, speciesNumber(first));
       break;
     case "evolution":
       result = await prepareEvolution(appHome, speciesNumber(first), speciesNumber(second));

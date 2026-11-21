@@ -9,8 +9,10 @@ import { buildBiome, clearRoute, isWalkable, nearestGround, compareDepth, BIOME_
 import { WORLD_HEIGHT } from "./biome-world.js";
 import { SPRITE_PATH, SPRITE_VERSION, TERRAIN_PATH, TERRAIN_VERSION } from "./asset-paths.js";
 import { boundedStep, separationStep, walkKeepsDistance } from "./movement.js";
+import { moveForSpecies } from "./moves.js";
 
 const DIRECTIONS = ["e", "se", "s", "sw", "w", "nw", "n", "ne"];
+const ELEMENTAL_MOVE = "elemental-move";
 const PLACEHOLDER_BOUNDS = [20.16, 18.24, 75.84, 77.76];
 
 function spriteBody([left, top, right, bottom], size) {
@@ -231,6 +233,29 @@ export default class PokemonHabitat extends View {
         }
       });
     }
+    for (const number of numbers) {
+      if (this.downloads >= 2) break;
+      const asset = this.assets.get(number);
+      if (asset?.state === "ready" && moveForSpecies(number)) this.loadMove(number, asset, cx);
+    }
+  }
+
+  loadMove(number, asset, cx) {
+    const previous = asset.move;
+    if (previous?.state === "loading" || previous?.duration || Date.now() < (previous?.retry ?? 0)) return;
+    asset.move = {state: "loading"};
+    this.downloads++;
+    cx.spawn(async cx => {
+      try {
+        asset.move = await prepareArtwork("move", number);
+      } catch (error) {
+        asset.move = {retry: Date.now() + 60_000};
+        console.log(`Pokémon ${number} elemental move: ${error}`);
+      } finally {
+        this.downloads--;
+        cx.notify();
+      }
+    });
   }
 
   spriteSize() {
@@ -487,7 +512,7 @@ export default class PokemonHabitat extends View {
       }
       if (status !== "working" || now < motion.next) continue;
       const number = this.pokemon[address]?.[0];
-      const manifest = this.assets.get(number)?.manifest;
+      const {manifest, move} = this.assets.get(number) ?? {};
       if (motion.action !== "idle") {
         // Let a full idle cycle settle the pose before drawing the next activity.
         const cycle = manifest?.durations?.idle ?? 1000;
@@ -498,19 +523,24 @@ export default class PokemonHabitat extends View {
         continue;
       }
       if (hovering) continue;
-      const actions = [...new Set([...(manifest?.randomActions ?? []), manifest?.workAction])]
+      const moveBody = move?.bounds?.[motion.direction];
+      const canCast = moveBody && isWalkable(biome, motion.x + offset, motion.y, 5, spriteBody(moveBody, size));
+      const actions = [...new Set([...(manifest?.randomActions ?? []), canCast ? ELEMENTAL_MOVE : manifest?.workAction])]
         .filter(action => {
           if (!action || action === "idle") return false;
+          if (action === ELEMENTAL_MOVE) return true;
           const box = manifest?.bounds?.[action]?.[motion.direction];
           return !box || isWalkable(biome, motion.x + offset, motion.y, 5, spriteBody(box, size));
         });
       if (actions.length && Math.random() < motion.moveChance) {
         const available = actions.filter(action => action !== motion.lastGesture);
         const choices = available.length ? available : actions;
-        motion.action = choices[Math.floor(Math.random() * choices.length)];
+        motion.action = choices.includes(ELEMENTAL_MOVE) && Math.random() < .5
+          ? ELEMENTAL_MOVE : choices[Math.floor(Math.random() * choices.length)];
         motion.lastGesture = motion.action;
         motion.moveChance = .2;
-        motion.next = now + (manifest?.durations?.[motion.action] ?? 1000);
+        const duration = motion.action === ELEMENTAL_MOVE ? move.duration : manifest?.durations?.[motion.action];
+        motion.next = now + (duration ?? 1000);
         motion.sequence = (motion.sequence ?? 0) + 1;
         changed = true;
         continue;
@@ -655,7 +685,8 @@ export default class PokemonHabitat extends View {
     const number = this.pokemon[address]?.[0];
     const asset = this.assets.get(number), motion = this.walker(address);
     const action = spriteAction(status, motion);
-    return asset?.manifest?.bounds?.[action]?.[motion.direction] ?? PLACEHOLDER_BOUNDS;
+    const bounds = action === ELEMENTAL_MOVE ? asset?.move?.bounds : asset?.manifest?.bounds?.[action];
+    return bounds?.[motion.direction] ?? PLACEHOLDER_BOUNDS;
   }
 
   pokemonSprite(address, status, size = this.spriteSize()) {
@@ -671,8 +702,16 @@ export default class PokemonHabitat extends View {
     const sprite = filename
       ? image(`${SPRITE_PATH}/${number}/${filename}`).size(size)
       : placeholderSprite(size);
-    const body = div().id(key + "-body").absolute().left(0).top(0).size(size)
-      .child(div().id(`${key}-${action}-${motion.sequence ?? 0}`).size(size).child(sprite));
+    const pose = div().id(`${key}-${action}-${motion.sequence ?? 0}`).size(size);
+    if (action === ELEMENTAL_MOVE && asset?.move?.duration) {
+      const { width, height, left, top } = asset.move.frame;
+      const scale = size / 96;
+      pose.child(image(`${asset.move.path}/${motion.direction}.webp`).absolute()
+        .left(left * scale).top(top * scale).w(width * scale).h(height * scale));
+    } else {
+      pose.child(sprite);
+    }
+    const body = div().id(key + "-body").absolute().left(0).top(0).size(size).child(pose);
     const scene = div().id(key).relative().size(size).flex_none().child(body);
     if (asset?.state === "loading" || !asset) {
       scene.child(div().absolute().bottom(0).left(0).text_size(10).text_color("#f4f7e5")

@@ -17,13 +17,16 @@ const types = [["Grass","#56b879"],["Fire","#f28b51"],["Water","#60a9e0"],
   ["Electric","#edc850"],["Fairy","#e99abf"],["Normal","#baad8d"],
   ["Water","#70b9d4"],["Fire","#e9a369"],["Ghost","#ad8cdb"],
   ["Normal","#c69b70"],["Normal","#77a99c"],["Dragon","#8e9fea"]];
+const individualTypes = {
+  134: ["Water","#60a9e0"],
+  135: ["Electric","#edc850"],
+  136: ["Fire","#f28b51"],
+};
 function familyFor(number) { return families.findIndex(line => line.some(mon => mon[0] === number)); }
+function typing(number) { return individualTypes[number] ?? types[familyFor(number)]; }
+export function typeForSpecies(number) { return typing(number)?.[0]; }
 export function infoFor(mon) {
-  const index = familyFor(mon[0]);
-  let [type,color] = types[index] ?? ["Normal","#baad8d"];
-  if (mon[0] === 134) [type,color] = ["Water","#60a9e0"];
-  if (mon[0] === 135) [type,color] = ["Electric","#edc850"];
-  if (mon[0] === 136) [type,color] = ["Fire","#f28b51"];
+  const [type,color] = typing(mon[0]) ?? ["Normal","#baad8d"];
   return {number:mon[0], name:mon[1], type, color};
 }
 export function nextForms(number) {

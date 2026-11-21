@@ -3,10 +3,12 @@ import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { SPRITE_PATH } from "../asset-paths.js";
+import { SPRITE_PATH, movePackPath } from "../asset-paths.js";
+import { families, infoFor } from "../evolution.js";
+import { moveForSpecies } from "../moves.js";
 import { prepareEvolution } from "../assets/effects.js";
-import { Raster, readImageMetadata, writePng } from "../assets/raster.js";
-import { prepareSprites } from "../assets/sprites.js";
+import { animationBounds, Raster, readImageMetadata, writePng } from "../assets/raster.js";
+import { prepareSprites, prepareMove } from "../assets/sprites.js";
 import { addEdges, MASKS } from "../assets/terrain-tiles.js";
 
 function solid(color) {
@@ -90,4 +92,66 @@ test("sprite and evolution packs preserve timing, credits, and shared cache beha
   assert.equal(effectInfo.loop, 1);
   await assert.rejects(prepareSprites(home, 3), /HTTP 404/);
   assert.deepEqual((await readdir(join(home, SPRITE_PATH))).sort(), ["1", "2"]);
+});
+
+test("water-jet packs add directional one-shots to older cached companions", async (t) => {
+  const home = await mkdtemp(join(tmpdir(), "pokemon-water-jet-test-"));
+  t.after(() => rm(home, { recursive: true, force: true }));
+  const shootTicks = [2, 6, 2, 2, 2, 2, 2, 2, 2, 2, 2];
+  const metadata = `<AnimData><Anims>
+    <Anim><Name>Idle</Name><FrameWidth>8</FrameWidth><FrameHeight>8</FrameHeight>
+      <Durations><Duration>12</Duration></Durations></Anim>
+    <Anim><Name>Walk</Name><CopyOf>Idle</CopyOf></Anim>
+    <Anim><Name>Sleep</Name><CopyOf>Idle</CopyOf></Anim>
+    <Anim><Name>Shoot</Name><FrameWidth>8</FrameWidth><FrameHeight>8</FrameHeight><HitFrame>4</HitFrame>
+      <Durations>${shootTicks.map(ticks => `<Duration>${ticks}</Duration>`).join("")}</Durations></Anim>
+  </Anims></AnimData>`;
+  const idle = new Raster(8, 8), shoot = new Raster(8 * shootTicks.length, 8), markers = new Raster(shoot.width, 8);
+  idle.fill(2, 2, 4, 4, [140, 125, 90, 255]);
+  for (let col = 0; col < shootTicks.length; col++) {
+    shoot.fill(col * 8 + 2, 2, 4, 4, [140, 125 + col, 90, 255]);
+  }
+  markers.set(4 * 8 + 4, 3, [0, 0, 0, 255]);
+  const files = { "AnimData.xml": metadata, "credits.txt": "Test artist" };
+  for (const [name, raster] of [["Idle-Anim.png", idle], ["Shoot-Anim.png", shoot], ["Shoot-Offsets.png", markers]]) {
+    await writePng(raster, join(home, name));
+    files[name] = await readFile(join(home, name));
+  }
+  const fetch = t.mock.method(globalThis, "fetch", async (url) => new Response(files[new URL(url).pathname.split("/").at(-1)]));
+  const { alignment, ...legacy } = await prepareSprites(home, 7);
+  const manifest = join(home, SPRITE_PATH, "7", "manifest.json");
+  await writeFile(manifest, JSON.stringify(legacy));
+
+  const jet = await prepareMove(home, 7);
+  assert.equal(jet.path, movePackPath("water-jet", 7));
+  assert.deepEqual(JSON.parse(await readFile(manifest, "utf8")), legacy);
+  assert.equal(Object.keys(jet.bounds).length, 8);
+  for (const direction of Object.keys(jet.bounds)) {
+    const path = join(home, jet.path, `${direction}.webp`);
+    const clip = await readImageMetadata(path);
+    assert.equal(clip.loop, 1);
+    assert.equal(clip.delay.reduce((sum, delay) => sum + delay, 0), jet.duration);
+  }
+  assert.deepEqual(jet.bounds.e, legacy.bounds.idle.e);
+  const effectBounds = await animationBounds(join(home, jet.path, "e.webp"));
+  assert.ok(effectBounds[2] * jet.frame.width / 96 + jet.frame.left > jet.bounds.e[2]);
+  const calls = fetch.mock.callCount();
+  assert.deepEqual(await prepareMove(home, 7), jet);
+  assert.equal(fetch.mock.callCount(), calls);
+});
+
+test("every roster species gets its type's move, including Eevee's evolved forms", () => {
+  const expected = {
+    Grass: "leaf-storm", Fire: "fire-breath", Water: "water-jet", Electric: "lightning-whip",
+    Fairy: "fairy-nova", Normal: "shockwave-ring", Ghost: "shadow-burst", Dragon: "dragon-pulse",
+  };
+  for (const mon of families.flat()) {
+    const {number, name, type} = infoFor(mon);
+    assert.ok(expected[type], name);
+    assert.equal(moveForSpecies(number), expected[type], name);
+  }
+  assert.deepEqual([133, 134, 135, 136].map(moveForSpecies), [
+    "shockwave-ring", "water-jet", "lightning-whip", "fire-breath",
+  ]);
+  assert.equal(moveForSpecies(1025), undefined);
 });

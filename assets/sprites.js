@@ -1,11 +1,13 @@
-import { mkdtemp, rename, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rename, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { XMLParser } from "fast-xml-parser";
-import { SPRITE_PATH, SPRITE_VERSION } from "../asset-paths.js";
+import { SPRITE_PATH, SPRITE_VERSION, movePackPath } from "../asset-paths.js";
+import { moveForSpecies } from "../moves.js";
 import { download, downloadFiles, hashes, isFile, publishFile, publishPack, readManifest,
   withPackLock, writeManifest } from "./cache.js";
 import { buildLifecycle, CANVAS_SIZE } from "./effects.js";
 import { animationBounds, Raster, readRaster, unionBounds, writeAnimation } from "./raster.js";
+import { buildMove } from "./move-effects.js";
 
 const SOURCE = "https://raw.githubusercontent.com/PMDCollab/SpriteCollab/master";
 const LIMIT = 4 * 1024 * 1024;
@@ -14,8 +16,10 @@ const DIRECTIONS = ["s", "se", "e", "ne", "n", "nw", "w", "sw"];
 const GESTURES = ["Hop", "Rotate", "Pose", "Nod", "DeepBreath", "Eat", "LookUp", "Stretch",
   "Shake", "Dance", "Appeal", "Swing", "Double", "Shoot"];
 const WORK_ACTIONS = ["Attack", "QuickStrike", "Charge", "Swing"];
+const CAST_POSES = ["Shoot", "SpAttack", ...WORK_ACTIONS, "Idle"];
 const REQUIRED = ["Walk", "Idle", "Sleep"];
 const FILE_NAME = /^[a-z0-9_-]+\.webp$/;
+const MOVE_PACK_VERSION = 2;
 const XML = new XMLParser({
   processEntities: false,
   parseTagValue: false,
@@ -28,12 +32,15 @@ function roundPixel(value) {
   return value - lower === .5 ? lower + (lower & 1) : Math.round(value);
 }
 
-function chooseAnimations(metadata) {
+function chooseAnimations(metadata, movePoses = []) {
   const nodes = new Map(XML.parse(metadata.toString("utf8")).AnimData?.Anims?.Anim?.map((node) => [node.Name, node]));
   const gestures = GESTURES.filter((name) => nodes.has(name)).slice(0, 8);
   const work = WORK_ACTIONS.find((name) => nodes.has(name)) ?? "Idle";
+  const movePose = movePoses.find(name => nodes.has(name));
   const sources = new Map();
-  for (const action of new Set([...REQUIRED, work, ...gestures])) {
+  const actions = new Set([...REQUIRED, work, ...gestures]);
+  if (movePose) actions.add(movePose);
+  for (const action of actions) {
     const seen = new Set();
     let name = action, node = nodes.get(name);
     while (node?.CopyOf) {
@@ -45,7 +52,7 @@ function chooseAnimations(metadata) {
     if (!node || !/^[A-Za-z0-9_-]+$/.test(name)) throw new Error(`${action} animation is unavailable`);
     sources.set(action.toLowerCase(), { node, filename: `${name}-Anim.png` });
   }
-  return { sources, gestures: gestures.map((name) => name.toLowerCase()), work: work.toLowerCase() };
+  return { sources, gestures: gestures.map((name) => name.toLowerCase()), work: work.toLowerCase(), movePose: movePose?.toLowerCase() };
 }
 
 async function unpack(data, node) {
@@ -79,11 +86,16 @@ function spriteAlignment(animations) {
   return { scale: scale * CANVAS_SIZE / 96, anchor: (88 - bottom * scale) * CANVAS_SIZE / 96 };
 }
 
-function placeFrame(frame, { scale, anchor }) {
-  const scaled = frame.resize(Math.max(1, roundPixel(frame.width * scale)),
-    Math.max(1, roundPixel(frame.height * scale)));
+function framePlacement(frame, { scale, anchor }) {
+  const width = Math.max(1, roundPixel(frame.width * scale));
+  const height = Math.max(1, roundPixel(frame.height * scale));
+  return { width, height, left: roundPixel((CANVAS_SIZE - width) / 2), top: roundPixel(anchor - height / 2) };
+}
+
+function placeFrame(frame, alignment) {
+  const { width, height, left, top } = framePlacement(frame, alignment);
   const canvas = new Raster(CANVAS_SIZE, CANVAS_SIZE);
-  canvas.composite(scaled, roundPixel((CANVAS_SIZE - scaled.width) / 2), roundPixel(anchor - scaled.height / 2));
+  canvas.composite(frame.resize(width, height), left, top);
   return canvas;
 }
 
@@ -139,7 +151,7 @@ async function buildSprites(folder, number) {
   const manifest = {
     version: SPRITE_VERSION, canvasSize: CANVAS_SIZE, number, source,
     communityArtworkLicense: "https://creativecommons.org/licenses/by-nc/4.0/",
-    animations: {}, durations: {}, bounds: {}, randomActions: gestures, workAction: work,
+    animations: {}, durations: {}, bounds: {}, alignment, randomActions: gestures, workAction: work,
     sha256: hashes({ ...files, "AnimData.xml": metadata }),
   };
   for (const [action, { rows, durations }] of animations) {
@@ -173,5 +185,42 @@ export async function prepareSprites(appHome, number) {
   return withPackLock(destination, async () => {
     const cached = await readCached(destination, number);
     return cached ?? publishPack(destination, (folder) => buildSprites(folder, number));
+  });
+}
+
+export async function prepareMove(appHome, number) {
+  const move = moveForSpecies(number);
+  if (!move) throw new Error("Elemental move is unavailable for this species");
+  const version = number === 9 ? 3 : MOVE_PACK_VERSION;
+  const path = movePackPath(move, number);
+  const destination = join(appHome, path);
+  return withPackLock(destination, async () => {
+    const cached = await readManifest(destination);
+    if (cached?.version === version && cached.duration && cached.frame && (await Promise.all(DIRECTIONS.map((direction) =>
+      cached.bounds?.[direction] && isFile(join(destination, `${direction}.webp`))))).every(Boolean)) return { ...cached, path };
+    return publishPack(destination, async (folder) => {
+      const base = await prepareSprites(appHome, number);
+      const source = `${SOURCE}/sprite/${String(number).padStart(4, "0")}`;
+      const metadata = await readFile(join(appHome, SPRITE_PATH, String(number), "AnimData.xml"));
+      const { sources, movePose } = chooseAnimations(metadata, move === "shockwave-ring" ? WORK_ACTIONS.concat("Idle") : CAST_POSES);
+      const pose = sources.get(movePose);
+      const offsets = pose.filename.replace("-Anim.png", "-Offsets.png");
+      const names = new Set([pose.filename, offsets]);
+      // Older v4 packs already have sprites on disk, but lack their source alignment.
+      const baseSources = [...sources].filter(([action]) => base.animations[action]);
+      if (!base.alignment) for (const [, {filename}] of baseSources) names.add(filename);
+      const files = await downloadFiles(source, [...names], LIMIT, TIMEOUT);
+      const alignment = base.alignment ?? spriteAlignment(new Map(await Promise.all(baseSources.map(
+        async ([action, {node, filename}]) => [action, await unpack(files[filename], node)]))));
+      const { rows, durations } = await unpack(files[pose.filename], pose.node);
+      const offsetRows = (await unpack(files[offsets], pose.node)).rows;
+      const result = await buildMove({
+        folder, move, number, directions: DIRECTIONS, rows, offsetRows, durations, hitFrame: Number(pose.node.HitFrame),
+        canvasSize: CANVAS_SIZE, alignment, placeFrame, framePlacement,
+      });
+      const manifest = { version, ...result };
+      await writeManifest(folder, manifest);
+      return { ...manifest, path };
+    });
   });
 }
