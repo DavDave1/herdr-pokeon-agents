@@ -84,7 +84,7 @@ function pixelBubble(sprite) {
   return bubble;
 }
 
-export function statusSprites(notifications, {width, height}) {
+export function statusSprites(notifications, {width, height}, motionEpoch) {
   const visible = notifications.map(notification => ({...notification, sprite: SPRITES.get(notification.status)}))
     .filter(({sprite, bounds: [left, top, right, bottom]}) =>
       sprite && right > 0 && left < width && bottom > 0 && top < height)
@@ -117,7 +117,7 @@ export function statusSprites(notifications, {width, height}) {
       ?? fit([upperRight, above]);
     occupied.push(footprint(position));
     const {x, y} = position;
-    elements.push(div().id(`pokemon-status-position-${address}`).absolute().left(x).top(y).w(w).h(h)
+    elements.push(div().id(`pokemon-status-position-${address}-${motionEpoch}`).absolute().left(x).top(y).w(w).h(h)
       .transition("left", {duration, easing: "linear"})
       .transition("top", {duration, easing: "linear"})
       .child(pixelBubble(sprite).id(`pokemon-status-${address}-${status}`)
