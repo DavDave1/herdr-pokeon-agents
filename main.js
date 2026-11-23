@@ -16,6 +16,12 @@ const ELEMENTAL_MOVE = "elemental-move";
 const PLACEHOLDER_BOUNDS = [20.16, 18.24, 75.84, 77.76];
 const ACTIVITY_INTERVAL = 250;
 const ACTIVITY_PAUSE = 1000;
+const BIOME_PALETTES = {
+  forest: {edge: "#243e35", frame: "#79a877", paper: "#f3f4d9", highlight: "#c8dab4", ink: "#293e32", muted: "#536650"},
+  desert: {edge: "#59432f", frame: "#c9a265", paper: "#fff0cb", highlight: "#efd4a5", ink: "#503c2d", muted: "#796044"},
+  cave: {edge: "#302e46", frame: "#8e86a5", paper: "#eeebf5", highlight: "#cdc5e1", ink: "#39364e", muted: "#696078"},
+  mountain: {edge: "#2e414d", frame: "#8ba7af", paper: "#edf2e9", highlight: "#c4d8db", ink: "#314752", muted: "#5b7078"},
+};
 
 function spriteBody([left, top, right, bottom], size) {
   const scale = size / 96;
@@ -303,33 +309,69 @@ export default class PokemonHabitat extends View {
     this.size = size;
   }
 
-  optionsMenu() {
-    const trigger = div().id("pokemon-options-button").px(10).py(5).rounded(6)
-      .bg("#132e25e8").text_size(12).text_color("#edf8dc").cursor_pointer()
-      .hover(style => style.bg("#244b3b")).child("Options");
+  habitatHeader(agentCount, palette) {
+    const type = this.biomeType;
+    const root = this.terrain.path;
+    const thumbnail = div().relative().size(28).flex_none().overflow_hidden()
+      .border(1).border_color(palette.edge).bg(palette.frame);
+    if (root) {
+      const tiles = type === "forest" ? root : `${root}/${type}`;
+      const ground = type === "desert" ? "water-0" : "1";
+      thumbnail.child(image(`${tiles}/${ground}.png`).size_full());
+      if (type === "forest") {
+        thumbnail.child(image(`${tiles}/tree.png`).absolute().bottom(1).left(5).w(16).h(24));
+      } else if (type !== "desert") {
+        thumbnail.child(image(`${tiles}/rock.png`).absolute().bottom(2).left(3).size(20));
+      }
+    }
+
+    return div().id("pokemon-habitat-header").absolute().top(8).left(10).right(10).max_w(420)
+      .p(2).bg(palette.edge).font_family("JetBrains Mono").text_color(palette.ink)
+      .child(h_flex().items_center().gap(8).px(6).py(4).border_b(2).border_color(palette.frame).bg(palette.paper)
+        .child(thumbnail)
+        .child(v_flex().flex_1().min_w(0)
+          .child(div().font_bold().text_size(13).truncate().child(BIOME_LABELS[type]))
+          .child(div().text_size(10).text_color(palette.muted).truncate()
+            .child(`${agentCount} agent${agentCount === 1 ? "" : "s"}`)))
+        .child(div().flex_none().child(this.optionsMenu(palette))));
+  }
+
+  optionsMenu(palette) {
+    const trigger = h_flex().id("pokemon-options-button").h(28).px(8).gap(7).items_center()
+      .border(1).border_b(3).border_color(palette.edge)
+      .bg(this.optionsOpen ? palette.highlight : palette.paper).text_color(palette.ink)
+      .font_bold().text_size(11).cursor_pointer()
+      .hover(style => style.bg(palette.highlight)).active(style => style.bg(palette.highlight))
+      .child("Options")
+      .child(v_flex().items_center()
+        .children((this.optionsOpen ? [2, 4, 6] : [6, 4, 2]).map(width => div().w(width).h(1).bg(palette.edge))));
     return Popover.new("pokemon-options").anchor("top_right")
       .open(this.optionsOpen)
       .on_open_change((open, cx) => { this.optionsOpen = open; cx.notify(); })
       .trigger(trigger)
-      .content(v_flex().w(180).p(8).gap(4).rounded(8).border(1).border_color("#446b56")
-        .bg("#fff9e8").text_color("#20372d").text_size(12)
-        .child(div().px(8).py(4).font_semibold().child("Biome"))
-        .children(BIOME_TYPES.map(type => h_flex().id(`pokemon-biome-${type}`).px(8).py(7).rounded(5).justify_between()
-          .bg(type === this.biomeType ? "#cfe6ce" : "#fff9e8").cursor_pointer()
-          .hover(style => style.bg("#dfedda"))
-          .child(type[0].toUpperCase() + type.slice(1)).child(type === this.biomeType ? "✓" : "")
-          .on_click((_event, cx) => {
-            this.biomeType = type;
-            localStorage.setItem("biome-type", type);
-            this.regenerateBiome(false);
-            cx.notify();
-          })))
-        .child(div().h(1).my(5).bg("#c5d5c0"))
-        .child(div().id("pokemon-new-biome").px(8).py(7).rounded(5).cursor_pointer()
-          .hover(style => style.bg("#dfedda"))
-          .child("Generate new biome")
-          .on_click((_event, cx) => { this.regenerateBiome(); cx.notify(); })));
-
+      .content(div().w(184).p(2).bg(palette.edge).font_family("JetBrains Mono")
+        .text_color(palette.ink).text_size(11)
+        .child(v_flex().p(4).gap(2).border_b(2).border_color(palette.frame).bg(palette.paper)
+          .child(div().px(6).py(4).font_bold().text_color(palette.muted).child("Biome"))
+          .children(BIOME_TYPES.map(type => {
+            const selected = type === this.biomeType;
+            return h_flex().id(`pokemon-biome-${type}`).px(6).h(26).items_center().justify_between()
+              .bg(selected ? palette.highlight : palette.paper).cursor_pointer()
+              .hover(style => style.bg(palette.highlight))
+              .when(selected, row => row.font_bold())
+              .child(type[0].toUpperCase() + type.slice(1)).child(selected ? "✓" : "")
+              .on_click((_event, cx) => {
+                this.biomeType = type;
+                localStorage.setItem("biome-type", type);
+                this.regenerateBiome(false);
+                cx.notify();
+              });
+          }))
+          .child(div().h(2).my(3).bg(palette.frame))
+          .child(div().id("pokemon-new-biome").px(6).py(6).cursor_pointer()
+            .hover(style => style.bg(palette.highlight))
+            .child("Generate new biome")
+            .on_click((_event, cx) => { this.regenerateBiome(); cx.notify(); }))));
   }
 
   regenerateBiome(newSeed = true) {
@@ -733,7 +775,9 @@ export default class PokemonHabitat extends View {
     this.syncPresence();
     this.advanceWalkers();
     const list = [...this.presence.values()].map(entry => entry.agent);
-    setAgentOrder(agents().map(a => a.address));
+    const liveAgents = agents();
+    setAgentOrder(liveAgents.map(a => a.address));
+    const palette = BIOME_PALETTES[this.biomeType];
     // Reserve surviving assignments first, repairing duplicates from older versions.
     const occupied = new Set(), live = {};
     for (const agent of list) {
@@ -814,12 +858,6 @@ export default class PokemonHabitat extends View {
         const title = summary;
         const bubbleWidth = Math.min(280, Math.max(200, width - 24));
         // A pixel-edged Pokédex shell surrounds a biome-tinted LCD screen.
-        const palette = {
-          forest: {edge: "#243e35", frame: "#79a877", paper: "#f3f4d9", ink: "#293e32", muted: "#536650"},
-          desert: {edge: "#59432f", frame: "#c9a265", paper: "#fff0cb", ink: "#503c2d", muted: "#796044"},
-          cave: {edge: "#302e46", frame: "#8e86a5", paper: "#eeebf5", ink: "#39364e", muted: "#696078"},
-          mountain: {edge: "#2e414d", frame: "#8ba7af", paper: "#edf2e9", ink: "#314752", muted: "#5b7078"},
-        }[this.biomeType];
         const statusColor = {working: "#32664b", blocked: "#934333", done: "#355a8a", idle: "#605b69"}[a.status] || palette.muted;
         const lamp = color => div().size(7).flex_none().border(1).border_color("#512635").bg(color);
         popup.content(div().w(bubbleWidth).p(3).rounded(3).bg("#492531")
@@ -868,10 +906,7 @@ export default class PokemonHabitat extends View {
     actors.sort(compareDepth);
     for (const item of actors) stage.child(item.actor);
     stage.children(statusSprites(notifications, this.size, this.motionEpoch));
-    stage.child(h_flex().absolute().top(10).left(14).right(14).items_center().justify_between()
-      .child(div().px(10).py(5).rounded(6).bg("#132e25e8").text_size(12).text_color("#edf8dc")
-        .child(`${BIOME_LABELS[this.biomeType]} · ${agents().length} agent${agents().length === 1 ? "" : "s"}`))
-      .child(this.optionsMenu()));
+    stage.child(this.habitatHeader(liveAgents.length, palette));
     // Keep release events out of Popup triggers and other controls while dragging.
     // A stationary surface also keeps the pointer target stable as actors move.
     if (this.drag) stage.child(div().id("pokemon-drag-surface").absolute().inset_0()
