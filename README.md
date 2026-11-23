@@ -1,8 +1,18 @@
 # Pokémon Agents
 
-Turn a Herdr panel into a roaming Pokémon habitat for your coding agents. Left-click a companion to open its agent. Right-click and drag to move it. Hover for agent status and accumulated working time.
+Turn a Herdr panel into a Pokémon habitat where companions roam, show agent status, and evolve as their agents accumulate working time.
 
-Choose **Options → Biome** to switch between Forest, Desert, Cave, and Mountain. Each habitat saves its biome and seed. Resizing reveals more of the same landscape, and **Options → Generate new biome** creates a new one. Companions can evolve as their agents accumulate working time.
+[![Forest clearing with three Pokémon companions and an open Pokédex card for Squirtle, whose agent is working](docs/screenshots/forest-habitat.webp)](docs/screenshots/forest-habitat.webp)
+
+## Explore the habitat
+
+- **Left-click** a companion to open its agent.
+- **Right-click and drag** a companion to move it.
+- **Hover** over a companion to see its agent’s status and accumulated working time in a Pokédex card.
+
+Choose **Options → Biome** to switch between Forest, Desert, Cave, and Mountain. Each habitat saves its biome and seed. Resizing reveals more of the same landscape. Choose **Options → Generate new biome** for a new landscape in the current biome.
+
+[![Desert oasis, Cavern, and Mountain pass side by side, with Cave selected in the open Options menu](docs/screenshots/biome-gallery.webp)](docs/screenshots/biome-gallery.webp)
 
 ## Install
 
@@ -43,3 +53,5 @@ Herdr loads the panel as JavaScript from `main.js`. The panel calls a separate N
 ## License and artwork
 
 The MIT license covers this project's code and original placeholder artwork. Optional artwork is fetched from SpriteCollab and pret's Pokémon Emerald archive. For source credits, cache locations, and artwork terms, see [ASSETS.md](ASSETS.md). [MIT license](LICENSE)
+
+The screenshots show sample agents with Chunsoft Pokémon sprites sourced through SpriteCollab and terrain from Pokémon Emerald by Nintendo, Game Freak, and The Pokémon Company. The illustrated artwork belongs to its respective rights holders.
