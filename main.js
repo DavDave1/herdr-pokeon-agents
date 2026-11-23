@@ -98,7 +98,8 @@ export default class PokemonHabitat extends View {
     this.previousWorking = new Set();
     if (checking()) return;
     this.lastActivity = Date.now();
-    this.windowActive = herdrWindow().active;
+    // Herdr can initialize this panel before the window state is available.
+    this.windowActive = herdrWindow()?.active;
     this.loadTerrain(cx);
     cx.timer.every(1000, cx => {
       this.trackWorkingTime(cx);
@@ -109,8 +110,8 @@ export default class PokemonHabitat extends View {
   }
 
   updateActivity(cx) {
-    const now = Date.now(), active = herdrWindow().active;
-    const resumed = now - this.lastActivity >= ACTIVITY_PAUSE || (active && !this.windowActive);
+    const now = Date.now(), active = herdrWindow()?.active ?? this.windowActive;
+    const resumed = now - this.lastActivity >= ACTIVITY_PAUSE || (active === true && this.windowActive === false);
     this.lastActivity = now;
     this.windowActive = active;
     if (resumed) {
