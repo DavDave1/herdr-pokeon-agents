@@ -3,9 +3,8 @@ import { v_flex, h_flex, Popup, Popover } from "gpui-base";
 import { agents, panes, spaces, run, setAgentOrder, exec, appHome, terminals, settings, checking, window as herdrWindow } from "herdr";
 
 import { families, infoFor, nextForms, thresholdFor, evolutionChance, runIdentity, formatTime } from "./evolution.js";
-import { placeholderSprite } from "./placeholder.js";
 import { statusSprites } from "./status-sprite.js";
-import { buildBiome, clearRoute, isWalkable, nearestGround, compareDepth, BIOME_TYPES, BIOME_LABELS } from "./biome.js";
+import { buildBiome, buildBiomeSteps, clearRoute, isWalkable, nearestGround, compareDepth, BIOME_TYPES, BIOME_LABELS } from "./biome.js";
 import { WORLD_HEIGHT } from "./biome-world.js";
 import { SPRITE_PATH, SPRITE_VERSION, TERRAIN_PATH, TERRAIN_VERSION } from "./asset-paths.js";
 import { boundedStep, separationStep, walkKeepsDistance } from "./movement.js";
@@ -21,6 +20,12 @@ const BIOME_PALETTES = {
   desert: {edge: "#59432f", frame: "#c9a265", paper: "#fff0cb", highlight: "#efd4a5", ink: "#503c2d", muted: "#796044"},
   cave: {edge: "#302e46", frame: "#8e86a5", paper: "#eeebf5", highlight: "#cdc5e1", ink: "#39364e", muted: "#696078"},
   mountain: {edge: "#2e414d", frame: "#8ba7af", paper: "#edf2e9", highlight: "#c4d8db", ink: "#314752", muted: "#5b7078"},
+};
+const GROUND_COLORS = {
+  forest: {ground: "#79b994", road: "#decd83", water: "#73bdf6", grass: "#4b9d67"},
+  desert: {ground: "#decd83", road: "#c5a462", water: "#73bdf6", grass: "#d4c273"},
+  cave: {ground: "#54424e", road: "#736a7b", water: "#4a7cbf", grass: "#4d3b46"},
+  mountain: {ground: "#836f82", road: "#b4a48b", water: "#73bdf6", grass: "#7a6679"},
 };
 
 function spriteBody([left, top, right, bottom], size) {
@@ -95,7 +100,6 @@ export default class PokemonHabitat extends View {
     this.assets = new Map();
     this.downloads = 0;
     this.terrain = {state: "pending"};
-    this.terrainFramePending = false;
     this.motionEpoch = 0;
     this.evolution = JSON.parse(localStorage.getItem("evolution-progress") ?? "{}");
     this.evolutionEffects = new Map();
@@ -132,12 +136,10 @@ export default class PokemonHabitat extends View {
     }
     const presenceChanged = this.syncPresence();
     const movementChanged = this.advanceWalkers(!resumed);
-    // The initial layout or asset load can finish before the scene has painted.
-    const terrainChanged = this.terrainFramePending && this.panelPixels?.width > 0 && this.panelPixels.height > 0;
-    if (terrainChanged) this.terrainFramePending = false;
-    if (resumed || presenceChanged || movementChanged || terrainChanged) cx.notify();
+    if (resumed || presenceChanged || movementChanged) cx.notify();
     this.loadAnimations(cx);
     this.loadTerrain(cx);
+    this.prepareBiome(cx);
   }
   syncPresence() {
     const now = Date.now(), list = agents(), live = new Set(list.map(agent => agent.address));
@@ -151,12 +153,10 @@ export default class PokemonHabitat extends View {
       }
       entry.agent = agent;
       const number = this.pokemon[agent.address]?.[0], asset = this.assets.get(number);
-      if (entry.phase === "loading" && this.drag?.address !== agent.address && ["ready", "failed"].includes(asset?.state)) {
+      if (entry.phase === "loading" && this.drag?.address !== agent.address && asset?.state === "ready") {
         entry.phase = "release";
         entry.started = now;
-        // Keep the same artwork for the whole effect if a download completes mid-cycle.
-        entry.cached = asset.state === "ready";
-        entry.duration = asset.manifest?.lifecycle?.release ?? 1200;
+        entry.duration = asset.manifest.lifecycle.release ?? 1200;
         changed = true;
       }
       if (entry.phase === "evolution" && now >= entry.started + entry.duration) {
@@ -190,8 +190,7 @@ export default class PokemonHabitat extends View {
         const asset = this.assets.get(this.pokemon[address]?.[0]);
         entry.phase = "recall";
         entry.started = now;
-        entry.cached = asset?.state === "ready";
-        entry.duration = asset?.manifest?.lifecycle?.recall ?? 1320;
+        entry.duration = asset.manifest.lifecycle.recall ?? 1320;
         if (this.hovered === address) this.hovered = null;
         changed = true;
       } else if (now >= entry.started + entry.duration) {
@@ -206,7 +205,6 @@ export default class PokemonHabitat extends View {
     const entry = this.presence.get(address);
     if (entry.phase === "evolution") return div().id(`evolution-${address}-${entry.started}`).size(size)
       .child(image(entry.effect).size(size));
-    if (!entry.cached) return placeholderSprite(size);
     const number = this.pokemon[address]?.[0];
     return div().id(`pokeball-${address}-${entry.phase}-${entry.started}`).size(size)
       .child(image(`${SPRITE_PATH}/${number}/${entry.phase}.webp`).size(size));
@@ -221,21 +219,12 @@ export default class PokemonHabitat extends View {
         const manifest = await prepareArtwork("terrain");
         if (manifest.version !== TERRAIN_VERSION || manifest.path !== TERRAIN_PATH) throw new Error("Invalid terrain manifest");
         this.terrain = {state: "ready", path: manifest.path};
-        this.terrainFramePending = true;
-        const now = Date.now();
-        for (const [address, motion] of this.walkers) {
-          if (this.drag?.address === address) continue;
-          stopWalk(motion, now);
-          this.settleOnGround(address, motion);
-          motion.action = "idle";
-          motion.next = now + 500;
-        }
       } catch (error) {
         this.terrain = {state: "failed", attempts: attempts + 1,
           retry: Date.now() + Math.min(300000, 30000 * 2 ** attempts)};
         console.log(`Terrain: ${error}`);
       }
-      cx.notify();
+      this.prepareBiome(cx);
     });
   }
 
@@ -388,13 +377,54 @@ export default class PokemonHabitat extends View {
     }
   }
 
+  biomeKey() {
+    return `${this.size.width}:${this.size.height}:${this.biomeSeed}:${this.biomeType}`;
+  }
+
   biome() {
-    const key = `${this.size.width}:${this.size.height}:${this.terrain.path ?? "placeholder"}:${this.biomeSeed}:${this.biomeType}`;
-    if (this.biomeKey !== key) {
-      this.biomeKey = key;
-      this.biomeLayout = buildBiome(this.size.width, this.size.height, this.terrain.path, this.biomeSeed, this.biomeType);
+    const key = this.biomeKey();
+    if (this.fullBiome?.key === key) return this.fullBiome.layout;
+    if (this.startupBiome?.key !== key) {
+      const layout = buildBiome(this.size.width, this.size.height, null, this.biomeSeed, this.biomeType);
+      this.startupBiome = {key, layout};
     }
-    return this.biomeLayout;
+    return this.startupBiome.layout;
+  }
+
+  prepareBiome(cx) {
+    if (!this.terrain.path || !this.panelPixels?.width || !this.panelPixels.height) return;
+    const key = this.biomeKey();
+    if (this.fullBiome?.key === key || this.biomeTask?.key === key) return;
+    const {width, height} = this.size;
+    const seed = this.biomeSeed, type = this.biomeType;
+    const steps = buildBiomeSteps(width, height, this.terrain.path, seed, type);
+    const task = {key};
+    this.biomeTask = task;
+    cx.spawn(async cx => {
+      try {
+        // Give Herdr a chance to paint and reset its script budget between chunks.
+        for (;;) {
+          await cx.sleep(1);
+          if (this.biomeTask !== task || this.biomeKey() !== key) return;
+          const step = steps.next();
+          if (!step.done) continue;
+          const previous = this.fullBiome;
+          this.fullBiome = {key, seed, type, layout: step.value};
+          cx.notify();
+          if (previous?.seed === seed && previous.type === type) return;
+          break;
+        }
+        const now = Date.now();
+        for (const [address, motion] of this.walkers) {
+          if (this.drag?.address === address) continue;
+          stopWalk(motion, now);
+          this.settleOnGround(address, motion);
+          Object.assign(motion, {action: "idle", next: now + 500});
+        }
+      } finally {
+        if (this.biomeTask === task) this.biomeTask = null;
+      }
+    });
   }
 
   terrainBody(address) {
@@ -740,34 +770,24 @@ export default class PokemonHabitat extends View {
   }
 
   pokemonSprite(address, status, size = this.spriteSize()) {
-    const info = this.pokemonInfo(address);
-    if (!info) return div().size(size).text_size(11).child("Awaiting Pokémon");
-    const {number} = info;
+    const [number] = this.pokemon[address];
     const key = `pokemon-${address}`;
     const motion = this.walker(address);
     const asset = this.assets.get(number);
-    const ready = asset?.state === "ready";
     const action = spriteAction(status, motion);
-    const filename = ready ? (asset.manifest.animations[action]?.[motion.direction] ?? asset.manifest.animations.idle[motion.direction]) : null;
-    const sprite = filename
-      ? image(`${SPRITE_PATH}/${number}/${filename}`).size(size)
-      : placeholderSprite(size);
     const pose = div().id(`${key}-${action}-${motion.sequence ?? 0}`).size(size);
-    if (action === ELEMENTAL_MOVE && asset?.move?.duration) {
+    if (action === ELEMENTAL_MOVE && asset.move?.duration) {
       const { width, height, left, top } = asset.move.frame;
       const scale = size / 96;
       pose.child(image(`${asset.move.path}/${motion.direction}.webp`).absolute()
         .left(left * scale).top(top * scale).w(width * scale).h(height * scale));
     } else {
-      pose.child(sprite);
+      const {animations} = asset.manifest;
+      const filename = animations[action]?.[motion.direction] ?? animations.idle[motion.direction];
+      pose.child(image(`${SPRITE_PATH}/${number}/${filename}`).size(size));
     }
     const body = div().id(key + "-body").absolute().left(0).top(0).size(size).child(pose);
-    const scene = div().id(key).relative().size(size).flex_none().child(body);
-    if (asset?.state === "loading" || !asset) {
-      scene.child(div().absolute().bottom(0).left(0).text_size(10).text_color("#f4f7e5")
-        .frames(["Arriving", "Arriving ·", "Arriving ··", "Arriving ···"], 500));
-    }
-    return scene;
+    return div().id(key).relative().size(size).flex_none().child(body);
   }
 
   render() {
@@ -778,6 +798,7 @@ export default class PokemonHabitat extends View {
     const liveAgents = agents();
     setAgentOrder(liveAgents.map(a => a.address));
     const palette = BIOME_PALETTES[this.biomeType];
+    const groundColors = GROUND_COLORS[this.biomeType];
     // Reserve surviving assignments first, repairing duplicates from older versions.
     const occupied = new Set(), live = {};
     for (const agent of list) {
@@ -795,24 +816,27 @@ export default class PokemonHabitat extends View {
     const width = this.size.width, height = this.size.height;
     const biome = this.biome();
     const stage = div().id("pokemon-meadow").relative().size_full().overflow_hidden()
-      .bg("#72b998").border_t(1).border_color("#5a997d")
+      .bg(groundColors.ground).border_t(1).border_color(palette.frame)
       .on_mouse_move((event, cx) => this.moveDrag(event, cx))
       .on_mouse_up("right", (event, cx) => { this.moveDrag(event, cx); this.stopDrag(cx); })
       .on_hover((on, cx) => { if (!on) this.stopDrag(cx); })
       .on_size_change((size, cx) => {
         if (this.panelPixels?.width !== size.width || this.panelPixels?.height !== size.height) {
-          if (!this.panelPixels?.width || !this.panelPixels.height) this.terrainFramePending = true;
           this.panelPixels = size;
           this.updatePanelSize();
           cx.notify();
+          this.prepareBiome(cx);
         }
       })
-      .child(div().id(`pokemon-ground:${this.biomeKey}`).absolute().inset_0().children(biome.ground.map(tile =>
-        image(tile.path).absolute().left(tile.x).bottom(height - tile.y - tile.h).w(tile.w).h(tile.h))));
+      .child(div().absolute().inset_0().children(biome.ground.map(tile => {
+        const cell = div().absolute().left(tile.x).bottom(height - tile.y - tile.h).w(tile.w).h(tile.h)
+          .bg(groundColors[tile.kind]);
+        return tile.path ? cell.child(image(tile.path).size_full()) : cell;
+      })));
 
     if (!list.length) stage.child(div().absolute().left(25).bottom(45).text_color("#f0f8e8").text_size(13).child("Your Pokémon will arrive when an agent reports its status."));
     const notifications = [];
-    const actors = list.map(a => {
+    const actors = list.filter(a => this.presence.get(a.address).phase !== "loading").map(a => {
       const mon = this.pokemonInfo(a.address), hover = !this.drag && this.hovered === a.address;
       const motion = this.walker(a.address);
       const spriteSize = this.spriteSize(), actorSize = spriteSize;
@@ -888,9 +912,7 @@ export default class PokemonHabitat extends View {
             .child(h_flex().items_center().gap(8)
               .child(div().w(20).h(6).bg("#492531"))
               .child(div().flex_1().min_w(0).px(5).py(3).border(1).border_color("#492531")
-                .bg(palette.frame).text_size(8).child(
-                  this.assets.get(mon.number)?.state === "ready" ? "SpriteCollab · credits saved with sprites" :
-                  this.assets.get(mon.number)?.state === "failed" ? "Generic companion · download will retry" : "Downloading animation cycles…"))
+                .bg(palette.frame).text_size(8).child("SpriteCollab · credits saved with sprites"))
               .child(h_flex().gap(2).children([0, 1, 2].map(() => div().w(2).h(10).bg("#842e43")))))));
 
       }

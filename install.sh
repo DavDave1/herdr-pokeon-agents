@@ -30,9 +30,9 @@ install_mod() {
   if [ ! -f "$mod_dir/node_modules/.package-lock.json" ]; then
     if command -v npm >/dev/null 2>&1 &&
         node -e 'process.exit(Number(process.versions.node.split(".")[0]) < 22 ? 1 : 0)' 2>/dev/null; then
-      npm ci --prefix "$mod_dir" || printf '%s\n' "Artwork setup failed. Opening with placeholders." >&2
+      npm ci --prefix "$mod_dir" || printf '%s\n' "Artwork setup failed. Opening with basic terrain." >&2
     else
-      printf '%s\n' "Opening with placeholders. Node.js 22+ and npm enable downloaded artwork."
+      printf '%s\n' "Opening with basic terrain. Node.js 22+ and npm enable Pokémon sprites and terrain artwork."
     fi
   fi
 

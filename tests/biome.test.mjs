@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import {buildBiome, roadMask, BIOME_TYPES, TILE, isWalkable, clearRoute, nearestGround} from '../biome.js';
+import {buildBiome, buildBiomeSteps, roadMask, BIOME_TYPES, TILE, isWalkable, clearRoute, nearestGround} from '../biome.js';
 import {createBiomeWorld, getBiomeWorld, overlaps, WORLD_HEIGHT} from '../biome-world.js';
 
 const terrain = 'terrain';
@@ -114,10 +114,32 @@ test('all connected tile masks match world neighbors, and seeds change layouts',
   }
 });
 
-test('placeholder fills the viewport without needing world assets', () => {
-  const b=buildBiome(1001,399.5);
-  assert.ok(b.ground.length>0);assert.equal(b.scenery.length,0);assert.equal(b.obstacles.length,0);
-  assert.ok(b.ground.some(p=>p.y<=0));assert.ok(b.ground.some(p=>p.y+p.h>=399.5));
+test('startup ground covers the same cells before and after artwork loads', () => {
+  const width = 1001, height = 399.5;
+  const cells = biome => new Map(biome.ground.map(({kind, x, y}) =>
+    [`${x}:${y}`, kind === 'grass' ? 'ground' : kind]));
+  for (const type of BIOME_TYPES) {
+    const startup = buildBiome(width, height, null, 4, type);
+    const loaded = buildBiome(width, height, terrain, 4, type);
+    assert.deepEqual(cells(startup), cells(loaded));
+    assert.ok(startup.ground.some(tile => tile.kind !== 'ground'));
+    assert.ok(startup.ground.some(tile => tile.y <= 0));
+    assert.ok(startup.ground.some(tile => tile.y + tile.h >= height && tile.x + tile.w >= width));
+    assert.ok(startup.ground.every(tile => !tile.path || tile.path.endsWith('placeholder.svg')));
+    for (const tile of startup.ground.filter(tile => tile.kind === 'water')) {
+      assert.equal(isWalkable(startup, tile.x + TILE / 2, tile.y + TILE / 2), false);
+    }
+  }
+});
+
+test('textured terrain generation yields before publishing the completed layout', () => {
+  const args = [800, 437.5, terrain, 4, 'forest'];
+  const steps = buildBiomeSteps(...args);
+  let step = steps.next();
+  assert.deepEqual(step, {value: undefined, done: false});
+  while (!step.done) step = steps.next();
+  assert.deepEqual(step.value, buildBiome(...args));
+  assert.ok(step.value.scenery.length > 0);
 });
 
 test('chunk cache is bounded and eviction preserves generation results', () => {

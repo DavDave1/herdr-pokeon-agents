@@ -22,7 +22,7 @@ With Herdr running and a space selected, paste this into a local Linux or macOS 
 curl -fsSL https://raw.githubusercontent.com/DavDave1/herdr-pokeon-agents/main/install.sh | sh
 ```
 
-With Node.js 22 or newer and npm available, the installer sets up downloadable terrain, sprites, and effects. Herdr needs `node` on its PATH to use them. The habitat uses placeholder artwork while downloads load or when the helper is unavailable.
+With Node.js 22 or newer and npm available, the installer sets up downloadable terrain, sprites, and effects. Herdr needs `node` on its PATH to use them. The habitat draws its ground immediately and releases each Pokémon once its animations are ready.
 
 ### Manual install
 

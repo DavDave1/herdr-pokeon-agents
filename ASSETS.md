@@ -1,6 +1,6 @@
 # Artwork and dependencies
 
-The mod ships an original grass tile in `tiles/placeholder.svg` and draws its generic companion in JavaScript. Node.js prepares optional artwork in the background and caches it under `data/pokemon-agents/` inside the Herdr home directory. Windows share each completed pack. A missing helper or a failed download leaves the placeholders available.
+The habitat draws the seeded ground immediately, using solid colors and the original grass tile in `tiles/placeholder.svg`. Node.js prepares terrain textures, scenery, and Pokémon animations in the background and caches them under `data/pokemon-agents/` inside the Herdr home directory. Windows share each completed pack. Each Pokémon enters the habitat once its sprite pack is ready.
 
 ## Pokémon sprites
 

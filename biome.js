@@ -17,19 +17,34 @@ export function roadMask(contains, x, y) {
     (w && n && contains(x - 1, y - 1) ? 128 : 0);
 }
 
-export function buildBiome(width, height, terrainPath = null, seed = 0, type = "forest") {
+export function buildBiome(...args) {
+  const steps = buildBiomeSteps(...args);
+  let step = steps.next();
+  while (!step.done) step = steps.next();
+  return step.value;
+}
+
+export function* buildBiomeSteps(width, height, terrainPath = null, seed = 0, type = "forest") {
   if (!BIOME_TYPES.includes(type)) type = "forest";
   const forest = type === "forest", offsetY = height - WORLD_HEIGHT;
   const cols = Math.ceil(width / TILE), firstRow = Math.floor(-offsetY / TILE);
   const lastRow = Math.ceil(WORLD_HEIGHT / TILE);
   const ground = [], scenery = [], obstacles = [];
   const asset = id => `${terrainPath}${forest ? "" : `/${type}`}/${id}.png`;
+  const world = getBiomeWorld(seed, type);
+  const addGround = (x, y, kind, path) => {
+    const tile = {x: x * TILE, y: y * TILE + offsetY, w: TILE, h: TILE};
+    ground.push({...tile, path, kind});
+    if (kind === "water") obstacles.push(tile);
+  };
   if (!terrainPath) {
-    for (let y = firstRow; y < lastRow; y++) for (let x = 0; x < cols; x++)
-      ground.push({path: PLACEHOLDER_TILE, x: x * TILE, y: y * TILE + offsetY, w: TILE, h: TILE});
+    // Roads and water can be drawn without generating the scenery chunks.
+    for (let y = firstRow; y < lastRow; y++) for (let x = 0; x < cols; x++) {
+      const kind = world.road(x, y) ? "road" : world.water(x, y) ? "water" : "ground";
+      addGround(x, y, kind, forest && kind === "ground" ? PLACEHOLDER_TILE : null);
+    }
     return {ground, scenery, obstacles};
   }
-  const world = getBiomeWorld(seed, type);
   const addProp = prop => {
     const y = prop.y + offsetY;
     scenery.push({...prop, id: `${type}-prop-${prop.id}`,
@@ -47,13 +62,13 @@ export function buildBiome(width, height, terrainPath = null, seed = 0, type = "
         if (tile.x < 0 || tile.x >= cols || tile.y < firstRow || tile.y >= lastRow) continue;
         const kind = tile.kind;
         const id = kind === "ground" ? 1 : `${kind}-${roadMask((x,y) => world.cell(x,y) === kind, tile.x, tile.y)}`;
-        ground.push({path: asset(id), x: tile.x * TILE, y: tile.y * TILE + offsetY, w: TILE, h: TILE});
-        if (kind === "water") obstacles.push({x: tile.x * TILE, y: tile.y * TILE + offsetY, w: TILE, h: TILE});
+        addGround(tile.x, tile.y, kind, asset(id));
       }
       for (const prop of chunk.props) {
         if (prop.x + prop.w < 0 || prop.x > width || prop.y + prop.h + offsetY < 0 || prop.y + offsetY > height) continue;
         addProp(prop);
       }
+      yield;
     }
   // Let the viewport crop the world naturally; no artificial top contour.
   scenery.sort(compareDepth);
