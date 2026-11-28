@@ -834,7 +834,6 @@ export default class PokemonHabitat extends View {
         return tile.path ? cell.child(image(tile.path).size_full()) : cell;
       })));
 
-    if (!list.length) stage.child(div().absolute().left(25).bottom(45).text_color("#f0f8e8").text_size(13).child("Your Pokémon will arrive when an agent reports its status."));
     const notifications = [];
     const actors = list.filter(a => this.presence.get(a.address).phase !== "loading").map(a => {
       const mon = this.pokemonInfo(a.address), hover = !this.drag && this.hovered === a.address;
